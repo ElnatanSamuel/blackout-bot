@@ -332,7 +332,10 @@ BOT_CHAT_TEMPLATES = {
         'agree': "🤖 {bot} says: {accuser} is right about {target}. Let's exile them.",
         'react': "🤖 {bot} says: '{message}'? That's exactly what a Corrupt would say, {target}.",
         'question': "🤖 {bot} says: {target}, you really believe '{message}'? Sus.",
-        'quiet': "🤖 {bot} says: I'm watching. Someone's gotta make a move."
+        'quiet': "🤖 {bot} says: I'm watching. Someone's gotta make a move.",
+        'accuse_dead': "🤖 {bot} says: {target} accused {player} and now {player}'s dead. Convenient.",
+        'vote_bloc': "🤖 {bot} says: {player} and {buddy} keep voting together. Team?",
+        'contradict': "🤖 {bot} says: {player} called {target} clean, now calls them sus. Liar.",
     },
     'Cautious': {
         'accuse': "🤖 {bot} says: Can someone scan {target}? Need more info.",
@@ -340,7 +343,10 @@ BOT_CHAT_TEMPLATES = {
         'agree': "🤖 {bot} says: {accuser} makes a good point about {target}.",
         'react': "🤖 {bot} says: {target}, what do you mean by '{message}'? Explain.",
         'question': "🤖 {bot} says: {target}, can you clarify '{message}'?",
-        'quiet': "🤖 {bot} says: Hmm... need to think about this."
+        'quiet': "🤖 {bot} says: Hmm... need to think about this.",
+        'accuse_dead': "🤖 {bot} says: {target} accused {player} and now they're gone. Interesting timing.",
+        'vote_bloc': "🤖 {bot} says: {player} and {buddy} always vote as a bloc. Collusion?",
+        'contradict': "🤖 {bot} says: {player} keeps changing their story about {target}.",
     },
     'Quiet': {
         'accuse': "🤖 {bot} says: {target} maybe?",
@@ -348,7 +354,10 @@ BOT_CHAT_TEMPLATES = {
         'agree': "🤖 {bot} says: Yeah.",
         'react': "🤖 {bot} says: '{message}' ...ok.",
         'question': "🤖 {bot} says: {target} said '{message}'... thoughts?",
-        'quiet': "🤖 {bot} says: ..."
+        'quiet': "🤖 {bot} says: ...",
+        'accuse_dead': "🤖 {bot} says: {target} mentioned {player} before {player} died.",
+        'vote_bloc': "🤖 {bot} says: {player} and {buddy} vote same.",
+        'contradict': "🤖 {bot} says: {player} switched on {target}.",
     },
     'Strategic': {
         'accuse': "🤖 {bot} says: {target}'s voting pattern matches Corrupt behavior.",
@@ -356,7 +365,10 @@ BOT_CHAT_TEMPLATES = {
         'agree': "🤖 {bot} says: {accuser} is onto something. {target} needs to explain.",
         'react': "🤖 {bot} says: '{message}' doesn't align with {target}'s previous statements.",
         'question': "🤖 {bot} says: {target}, your claim '{message}' needs evidence.",
-        'quiet': "🤖 {bot} says: Analyzing the data..."
+        'quiet': "🤖 {bot} says: Analyzing the data...",
+        'accuse_dead': "🤖 {bot} says: Statistical anomaly: {target} accused {player} pre-mortem.",
+        'vote_bloc': "🤖 {bot} says: {player} and {buddy} share {pct}% vote alignment. Correlated.",
+        'contradict': "🤖 {bot} says: {player}'s stance on {target} flipped. Deception indicator.",
     }
 }
 

@@ -2,6 +2,7 @@ import os
 
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', 'YOUR_FALLBACK_TOKEN_IF_LOCAL')
 DATABASE_PATH = os.getenv('DATABASE_PATH', 'blackout.db')
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
 
 BOT_DESCRIPTION = "⚡ BLACKOUT — Social deduction game. Find the corrupted before they eliminate everyone. Play solo vs AI or with friends in groups."
 

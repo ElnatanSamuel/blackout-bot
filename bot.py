@@ -6,7 +6,8 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import datetime
 from threading import Thread
 
-from config import TELEGRAM_BOT_TOKEN, GAME_SETTINGS, ROLE_POOLS, ROLE_DEFINITIONS, BOT_NAMES, BOT_PERSONALITIES, SUSPICION_WEIGHTS, BOT_DESCRIPTION
+from config import TELEGRAM_BOT_TOKEN, GAME_SETTINGS, ROLE_POOLS, ROLE_DEFINITIONS, BOT_NAMES, BOT_PERSONALITIES, SUSPICION_WEIGHTS, BOT_DESCRIPTION, GEMINI_API_KEY
+import ai_chat
 from database import (
     init_db, save_player, update_player_elo, increment_player_stats,
     get_player, get_leaderboard, create_game, end_game, add_game_player,
@@ -166,6 +167,9 @@ def init_bot_brain(game_state):
             'known_roles': {},
             'last_vote': None,
             'mentioned_by_player': False,
+            'statements': [],
+            'vote_blocs': {},
+            'contradictions': {},
         }
 
 
@@ -210,6 +214,20 @@ def update_bot_suspicions(game_state, speaker_uid, text):
         else:
             delta = 1 if is_corrupt else 0
         brain['suspicion'][target_uid] = brain['suspicion'].get(target_uid, 0) + delta
+
+        brain['statements'].append({
+            'round': game_state.current_round,
+            'speaker': speaker_uid,
+            'target': target_uid,
+            'intent': intent,
+        })
+
+        prev = [s for s in brain['statements'] if s['speaker'] == speaker_uid and s['target'] == target_uid and s['round'] < game_state.current_round]
+        for p in prev:
+            if p['intent'] != intent:
+                key = (speaker_uid, target_uid)
+                brain['contradictions'][key] = brain['contradictions'].get(key, 0) + 1
+                brain['suspicion'][speaker_uid] = brain['suspicion'].get(speaker_uid, 0) + 3
 
 
 def get_best_bot_responder(game_state, text):
@@ -406,21 +424,21 @@ def help_command(message):
 
 @bot.message_handler(commands=['solo'])
 def solo_command(message):
-    start_solo_game(message.chat.id, message.from_user.id)
+    start_solo_game(message.chat.id, message.from_user.id, message.from_user.first_name or 'You')
 
 
-def start_solo_game(chat_id, user_id):
+def start_solo_game(chat_id, user_id, user_name='You'):
     try:
         game_state = GameState(chat_id, user_id, 1, solo_mode=True)
         game_states[chat_id] = game_state
 
         game_state.players[user_id] = {
-            'name': 'You',
+            'name': user_name,
             'role': None,
             'is_alive': True,
             'elo': get_player(user_id)['elo'] if get_player(user_id) else GAME_SETTINGS['INITIAL_ELO']
         }
-        save_player(user_id, 'You')
+        save_player(user_id, user_name)
 
         available_names = list(BOT_NAMES)
         random.shuffle(available_names)
@@ -854,6 +872,14 @@ def handle_callback(call):
             except Exception:
                 pass
 
+        elif data == 'skip_ability':
+            game_state.night_actions[f"skip_{user_id}"] = True
+            bot.answer_callback_query(call.id, "Ability skipped.")
+            try:
+                bot.edit_message_text("✅ Ability skipped.", chat_id, call.message.message_id)
+            except Exception:
+                pass
+
         elif data == 'vote_skip':
             game_state.votes[user_id] = 'skip'
             game_state.send_to_creator(VOTE_SKIP_PUBLIC_MESSAGE.format(username=game_state.get_player_name(user_id)))
@@ -928,7 +954,7 @@ def handle_lobby_callback(call):
 
         elif data == 'lobby_solo':
             bot.answer_callback_query(call.id, "Starting solo game!")
-            start_solo_game(chat_id, user_id)
+            start_solo_game(chat_id, user_id, call.from_user.first_name or 'You')
 
         elif data == 'lobby_start_group':
             if is_dm:
@@ -1102,6 +1128,8 @@ def start_night_phase(game_state):
 
     def dawn_job():
         time.sleep(30)
+        if game_state.current_phase != 'NIGHT':
+            return
         resolve_night_actions(game_state)
         start_dawn_phase(game_state)
 
@@ -1113,6 +1141,7 @@ def send_kill_prompt(game_state, uid):
     for uid2, data2 in game_state.get_alive_players():
         if uid2 != uid:
             markup.add(InlineKeyboardButton(f"Kill: {game_state.get_player_name(uid2)}", callback_data=f"kill_{uid2}"))
+    markup.add(InlineKeyboardButton("Skip", callback_data="skip_ability"))
     try:
         bot.send_message(uid, NIGHT_MESSAGES['choose_target'], reply_markup=markup, parse_mode='Markdown')
     except Exception:
@@ -1126,6 +1155,7 @@ def send_mark_prompt(game_state, uid):
     for uid2, data2 in game_state.get_alive_players():
         if uid2 != uid and data2.get('role') in ROLE_POOLS['SURVIVOR_ABILITY']:
             markup.add(InlineKeyboardButton(f"Mark: {game_state.get_player_name(uid2)}", callback_data=f"mark_{uid2}"))
+    markup.add(InlineKeyboardButton("Skip", callback_data="skip_ability"))
     try:
         bot.send_message(uid, "Choose a player to mark:", reply_markup=markup, parse_mode='Markdown')
     except Exception:
@@ -1141,6 +1171,7 @@ def send_neutral_kill_prompt(game_state, uid):
     for uid2, data2 in game_state.get_alive_players():
         if uid2 != uid:
             markup.add(InlineKeyboardButton(f"Kill: {game_state.get_player_name(uid2)}", callback_data=f"neutral_kill_{uid2}"))
+    markup.add(InlineKeyboardButton("Skip", callback_data="skip_ability"))
     try:
         bot.send_message(uid, NIGHT_MESSAGES['choose_target'], reply_markup=markup, parse_mode='Markdown')
     except Exception:
@@ -1154,6 +1185,7 @@ def send_glitch_prompt(game_state, uid):
     markup = InlineKeyboardMarkup()
     for uid2, data2 in dead_with_abilities:
         markup.add(InlineKeyboardButton(f"Steal: {game_state.get_player_name(uid2)} ({data2['role']})", callback_data=f"steal_{uid2}"))
+    markup.add(InlineKeyboardButton("Skip", callback_data="skip_ability"))
     try:
         bot.send_message(uid, NIGHT_MESSAGES['glitch_steal'], reply_markup=markup, parse_mode='Markdown')
     except Exception:
@@ -1167,6 +1199,7 @@ def send_plague_prompt(game_state, uid):
     for uid2, data2 in game_state.get_alive_players():
         if uid2 != uid:
             markup.add(InlineKeyboardButton(f"Infect: {game_state.get_player_name(uid2)}", callback_data=f"infect_{uid2}"))
+    markup.add(InlineKeyboardButton("Skip", callback_data="skip_ability"))
     try:
         bot.send_message(uid, NIGHT_MESSAGES['plague_infect'], reply_markup=markup, parse_mode='Markdown')
     except Exception:
@@ -1179,6 +1212,7 @@ def send_protect_prompt(game_state, uid):
     for uid2, data2 in game_state.get_alive_players():
         if uid2 != uid and uid2 not in last_protected[-2:]:
             markup.add(InlineKeyboardButton(f"Protect: {game_state.get_player_name(uid2)}", callback_data=f"protect_{uid2}"))
+    markup.add(InlineKeyboardButton("Skip", callback_data="skip_ability"))
     try:
         bot.send_message(uid, NIGHT_MESSAGES['ability_prompt'], reply_markup=markup, parse_mode='Markdown')
     except Exception:
@@ -1191,6 +1225,7 @@ def send_scan_prompt(game_state, uid):
     for uid2, data2 in game_state.get_alive_players():
         if uid2 != uid and uid2 not in last_scanned[-2:]:
             markup.add(InlineKeyboardButton(f"Scan: {game_state.get_player_name(uid2)}", callback_data=f"scan_{uid2}"))
+    markup.add(InlineKeyboardButton("Skip", callback_data="skip_ability"))
     try:
         bot.send_message(uid, NIGHT_MESSAGES['ability_prompt'], reply_markup=markup, parse_mode='Markdown')
     except Exception:
@@ -1203,6 +1238,7 @@ def send_block_prompt(game_state, uid):
     for uid2, data2 in game_state.get_alive_players():
         if uid2 != uid and uid2 not in last_blocked[-2:]:
             markup.add(InlineKeyboardButton(f"Block: {game_state.get_player_name(uid2)}", callback_data=f"block_{uid2}"))
+    markup.add(InlineKeyboardButton("Skip", callback_data="skip_ability"))
     try:
         bot.send_message(uid, NIGHT_MESSAGES['ability_prompt'], reply_markup=markup, parse_mode='Markdown')
     except Exception:
@@ -1216,6 +1252,7 @@ def send_kernel_prompt(game_state, uid):
     for uid2, data2 in game_state.get_alive_players():
         if uid2 != uid:
             markup.add(InlineKeyboardButton(f"Reveal: {game_state.get_player_name(uid2)}", callback_data=f"reveal_{uid2}"))
+    markup.add(InlineKeyboardButton("Skip", callback_data="skip_ability"))
     try:
         bot.send_message(uid, NIGHT_MESSAGES['ability_prompt'], reply_markup=markup, parse_mode='Markdown')
     except Exception:
@@ -1231,6 +1268,7 @@ def send_flare_prompt(game_state, uid):
     markup = InlineKeyboardMarkup()
     for uid2, data2 in dead_players:
         markup.add(InlineKeyboardButton(f"Revive: {game_state.get_player_name(uid2)}", callback_data=f"revive_{uid2}"))
+    markup.add(InlineKeyboardButton("Skip", callback_data="skip_ability"))
     try:
         bot.send_message(uid, NIGHT_MESSAGES['ability_prompt'], reply_markup=markup, parse_mode='Markdown')
     except Exception:
@@ -1242,6 +1280,7 @@ def send_sheriff_prompt(game_state, uid):
     for uid2, data2 in game_state.get_alive_players():
         if uid2 != uid:
             markup.add(InlineKeyboardButton(f"Execute: {game_state.get_player_name(uid2)}", callback_data=f"sheriff_{uid2}"))
+    markup.add(InlineKeyboardButton("Skip", callback_data="skip_ability"))
     try:
         bot.send_message(uid, NIGHT_MESSAGES['choose_target'], reply_markup=markup, parse_mode='Markdown')
     except Exception:
@@ -1486,6 +1525,7 @@ def resolve_night_actions(game_state):
                 game_state.players[glitcher_uid]['role'] = target_role
 
     game_state.dead_this_round = list(dict.fromkeys(dead_this_round))
+    game_state.last_night_deaths = list(dict.fromkeys(dead_this_round))
 
 
 def start_dawn_phase(game_state):
@@ -1503,8 +1543,14 @@ def start_dawn_phase(game_state):
                         brain['suspicion'][other_uid] = brain['suspicion'].get(other_uid, 0) + 0.5
 
     if dead_this_round:
+        dead_ids = [uid for uid, _ in dead_this_round]
         for uid, data in dead_this_round:
             game_state.send_to_creator(DAWN_MESSAGES['kill'].format(username=game_state.get_player_name(uid)), parse_mode='Markdown')
+
+        for bot_uid, brain in game_state.bot_brain.items():
+            for stmt in brain.get('statements', []):
+                if stmt['target'] in dead_ids and stmt['intent'] == 'accuse':
+                    brain['suspicion'][stmt['speaker']] = brain['suspicion'].get(stmt['speaker'], 0) + 3
     else:
         game_state.send_to_creator(DAWN_MESSAGES['no_kill'], parse_mode='Markdown')
 
@@ -1529,6 +1575,8 @@ def start_day_phase(game_state):
         alive_bots = [(uid, d) for uid, d in game_state.bots.items() if d.get('is_alive', True)]
         random.shuffle(alive_bots)
         for uid, data in alive_bots:
+            if game_state.current_phase != 'DAY':
+                break
             elapsed = time.time() - start
             if elapsed >= 25:
                 break
@@ -1560,6 +1608,13 @@ def start_day_phase(game_state):
 def send_voting_phase(game_state):
     game_state.current_phase = 'VOTING'
 
+    creator_data = game_state.players.get(game_state.creator_id)
+    if creator_data and not creator_data.get('is_alive', True):
+        game_state.send_to_creator("💀 *You're dead.* Bots are voting...", parse_mode='Markdown')
+        bot_votes(game_state)
+        resolve_votes(game_state)
+        return
+
     markup = InlineKeyboardMarkup()
     for uid, data in game_state.get_alive_players():
         markup.add(InlineKeyboardButton(f"Vote: {game_state.get_player_name(uid)}", callback_data=f"vote_{uid}"))
@@ -1569,6 +1624,8 @@ def send_voting_phase(game_state):
 
     def auto_resolve():
         time.sleep(GAME_SETTINGS['VOTING_TIME'])
+        if game_state.current_phase != 'VOTING':
+            return
         bot_votes(game_state)
         resolve_votes(game_state)
 
@@ -1591,8 +1648,27 @@ def bot_votes(game_state):
         game_state.votes[uid] = top_target
         brain['last_vote'] = top_target
 
+    for uid, data in game_state.bots.items():
+        brain = game_state.bot_brain.get(uid, {})
+        if not brain or brain.get('last_vote') is None:
+            continue
+        for other_uid, other_data in game_state.bots.items():
+            if other_uid == uid:
+                continue
+            other_brain = game_state.bot_brain.get(other_uid, {})
+            if other_brain.get('last_vote') == brain['last_vote']:
+                pair = tuple(sorted((str(uid), str(other_uid))))
+                brain['vote_blocs'][pair] = brain['vote_blocs'].get(pair, 0) + 1
+                if brain['vote_blocs'][pair] >= 2:
+                    for pid in game_state.get_alive_players():
+                        vid = pid[0]
+                        if vid != uid and vid != other_uid:
+                            brain['suspicion'][vid] = brain['suspicion'].get(vid, 0) + 1
+
 
 def check_voting_complete(game_state):
+    if game_state.current_phase not in ('VOTING', 'DAY'):
+        return
     alive = game_state.get_alive_players()
     alive_uids = [uid for uid, d in alive]
 
@@ -1608,6 +1684,8 @@ def check_voting_complete(game_state):
 
 
 def resolve_votes(game_state):
+    if game_state.current_phase not in ('VOTING', 'DAY'):
+        return
     vote_counts = {}
     for voter_uid, target_uid in game_state.votes.items():
         if target_uid == 'skip':
@@ -1758,26 +1836,33 @@ def handle_message(message):
 
         update_bot_suspicions(game_state, user_id, text)
 
-        bot_uid, bot_data, action = get_best_bot_responder(game_state, text)
-        if bot_uid and bot_data:
+        def respond():
+            time.sleep(random.uniform(1, 3))
+            alive_bots = [(uid, d) for uid, d in game_state.bots.items() if d.get('is_alive', True)]
+            if not alive_bots:
+                return
+            bot_uid, bot_data = random.choice(alive_bots)
+
+            ai_text = ai_chat.get_bot_response(bot_data, game_state, text)
+            if ai_text:
+                prefix = bot_data.get('name', 'Bot')
+                game_state.send_to_creator(f"🤖 {prefix}: {ai_text}", parse_mode='Markdown')
+                return
+
             target_uid = find_mentioned_player(text, game_state)
             if target_uid is None:
                 alive_others = [uid2 for uid2, d2 in game_state.get_alive_players() if uid2 != bot_uid]
                 if alive_others:
                     brain = game_state.bot_brain.get(bot_uid, {})
                     suspicions = brain.get('suspicion', {})
-                    if suspicions:
-                        target_uid = max(suspicions, key=suspicions.get)
-                    else:
-                        target_uid = random.choice(alive_others)
-            final_uid, final_action = bot_uid, action
-            Thread(target=lambda: (
-                time.sleep(random.uniform(1, 3)),
-                game_state.send_to_creator(
-                    format_bot_response(game_state, final_uid, bot_data, target_uid, final_action, text),
-                    parse_mode='Markdown'
-                )
-            ), daemon=True).start()
+                    target_uid = max(suspicions, key=suspicions.get) if suspicions else random.choice(alive_others)
+            action = 'react' if target_uid else 'quiet'
+            game_state.send_to_creator(
+                format_bot_response(game_state, bot_uid, bot_data, target_uid, action, text),
+                parse_mode='Markdown'
+            )
+
+        Thread(target=respond, daemon=True).start()
 
 
 print("🤖 BLACKOUT Production Engine Operational...")
