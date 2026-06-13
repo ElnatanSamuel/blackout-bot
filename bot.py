@@ -129,6 +129,9 @@ class GameState:
         if len(alive_corrupt) == 0 and len(alive_neutrals) == 0:
             return 'SURVIVOR', None
 
+        if len(alive_neutrals) == 0 and len(alive_corrupt) >= len(alive_survivors):
+            return 'CORRUPT', None
+
         for uid, data in alive_neutrals:
             if data['role'] == 'Wraith' and len(all_alive) == 1:
                 return 'NEUTRAL', uid
@@ -1379,7 +1382,7 @@ def resolve_night_actions(game_state):
             if glitcher_uid in game_state.players and target_role:
                 game_state.players[glitcher_uid]['role'] = target_role
 
-    game_state.dead_this_round = dead_this_round
+    game_state.dead_this_round = list(dict.fromkeys(dead_this_round))
 
 
 def start_dawn_phase(game_state):
@@ -1488,15 +1491,18 @@ def bot_votes(game_state):
 
 
 def check_voting_complete(game_state):
-    if game_state.solo_mode:
+    alive = game_state.get_alive_players()
+    alive_uids = [uid for uid, d in alive]
+
+    if all(uid in game_state.votes for uid in alive_uids):
+        resolve_votes(game_state)
         return
 
-    alive = game_state.get_alive_players()
     alive_humans = [uid for uid, d in alive if not game_state.is_ai(uid)]
-
     if all(uid in game_state.votes for uid in alive_humans):
         bot_votes(game_state)
-        resolve_votes(game_state)
+        if all(uid in game_state.votes for uid in alive_uids):
+            resolve_votes(game_state)
 
 
 def resolve_votes(game_state):
