@@ -145,6 +145,14 @@ class GameState:
         self.send_msg(self.creator_id, text, **kwargs)
 
 
+def extract_uid(data, prefix_parts=1):
+    uid_str = data.split('_', prefix_parts)[prefix_parts]
+    try:
+        return int(uid_str)
+    except ValueError:
+        return uid_str
+
+
 def assign_roles(game_state):
     all_uids = list(game_state.players.keys()) + list(game_state.bots.keys())
     random.shuffle(all_uids)
@@ -300,7 +308,7 @@ def start_solo_game(chat_id, user_id):
         game_state = GameState(chat_id, user_id, 1, solo_mode=True)
         game_states[chat_id] = game_state
 
-        game_state.players[str(user_id)] = {
+        game_state.players[user_id] = {
             'name': 'You',
             'role': None,
             'is_alive': True,
@@ -597,7 +605,7 @@ def handle_callback(call):
             return
 
         if data.startswith('kill_'):
-            target_uid = int(data.split('_')[1])
+            target_uid = extract_uid(data, 1)
             game_state.night_actions[f"kill_{user_id}"] = target_uid
             bot.answer_callback_query(call.id, f"Target: {game_state.get_player_name(target_uid)}")
             try:
@@ -606,7 +614,7 @@ def handle_callback(call):
                 pass
 
         elif data.startswith('neutral_kill_'):
-            target_uid = int(data.split('_')[2])
+            target_uid = extract_uid(data, 2)
             game_state.night_actions[f"neutral_kill_{user_id}"] = target_uid
             role = game_state.players.get(user_id, {}).get('role')
             if role == 'Virus':
@@ -620,7 +628,7 @@ def handle_callback(call):
                 pass
 
         elif data.startswith('mark_'):
-            target_uid = int(data.split('_')[1])
+            target_uid = extract_uid(data, 1)
             game_state.night_actions[f"mark_{user_id}"] = target_uid
             bot.answer_callback_query(call.id, f"Marked: {game_state.get_player_name(target_uid)}")
             try:
@@ -629,7 +637,7 @@ def handle_callback(call):
                 pass
 
         elif data.startswith('protect_'):
-            target_uid = int(data.split('_')[1])
+            target_uid = extract_uid(data, 1)
             game_state.night_actions[f"protect_{user_id}"] = target_uid
             if user_id not in game_state.protection_history:
                 game_state.protection_history[user_id] = []
@@ -641,7 +649,7 @@ def handle_callback(call):
                 pass
 
         elif data.startswith('scan_'):
-            target_uid = int(data.split('_')[1])
+            target_uid = extract_uid(data, 1)
             game_state.night_actions[f"scan_{user_id}"] = target_uid
             if user_id not in game_state.scan_history:
                 game_state.scan_history[user_id] = []
@@ -659,7 +667,7 @@ def handle_callback(call):
                 pass
 
         elif data.startswith('block_'):
-            target_uid = int(data.split('_')[1])
+            target_uid = extract_uid(data, 1)
             game_state.night_actions[f"block_{user_id}"] = target_uid
             if user_id not in game_state.block_history:
                 game_state.block_history[user_id] = []
@@ -671,7 +679,7 @@ def handle_callback(call):
                 pass
 
         elif data.startswith('reveal_'):
-            target_uid = int(data.split('_')[1])
+            target_uid = extract_uid(data, 1)
             game_state.used_abilities[f"kernel_{user_id}"] = True
             target_role = game_state.players.get(target_uid, {}).get('role') or game_state.bots.get(target_uid, {}).get('role')
             try:
@@ -685,7 +693,7 @@ def handle_callback(call):
                 pass
 
         elif data.startswith('revive_'):
-            target_uid = int(data.split('_')[1])
+            target_uid = extract_uid(data, 1)
             game_state.used_abilities[f"flare_{user_id}"] = True
             if target_uid in game_state.players:
                 game_state.players[target_uid]['is_alive'] = True
@@ -707,7 +715,7 @@ def handle_callback(call):
                 pass
 
         elif data.startswith('sheriff_'):
-            target_uid = int(data.split('_')[1])
+            target_uid = extract_uid(data, 1)
             game_state.night_actions[f"sheriff_{user_id}"] = target_uid
             bot.answer_callback_query(call.id, f"Target: {game_state.get_player_name(target_uid)}")
             try:
@@ -716,7 +724,7 @@ def handle_callback(call):
                 pass
 
         elif data.startswith('infect_'):
-            target_uid = int(data.split('_')[1])
+            target_uid = extract_uid(data, 1)
             game_state.night_actions[f"infect_{user_id}"] = target_uid
             bot.answer_callback_query(call.id, f"Infected: {game_state.get_player_name(target_uid)}")
             try:
@@ -725,7 +733,7 @@ def handle_callback(call):
                 pass
 
         elif data.startswith('steal_'):
-            target_uid = int(data.split('_')[1])
+            target_uid = extract_uid(data, 1)
             game_state.used_abilities[f"glitch_{user_id}"] = True
             target_role = game_state.players.get(target_uid, {}).get('role') or game_state.bots.get(target_uid, {}).get('role')
             if user_id in game_state.players:
@@ -747,7 +755,7 @@ def handle_callback(call):
             check_voting_complete(game_state)
 
         elif data.startswith('vote_'):
-            target_uid = int(data.split('_')[1])
+            target_uid = extract_uid(data, 1)
             game_state.votes[user_id] = target_uid
             game_state.send_to_creator(VOTE_PUBLIC_MESSAGE.format(
                 username=game_state.get_player_name(user_id),
@@ -1194,7 +1202,7 @@ def resolve_bot_night_actions(game_state):
 
 
 def choose_bot_kill_target(game_state, bot_uid, alive_targets):
-    memories = get_ai_memories(f"bot_{bot_uid}")
+    memories = get_ai_memories(str(bot_uid))
     scores = {}
     for uid, data in alive_targets:
         score = memories.get(uid, 0)
@@ -1217,15 +1225,15 @@ def resolve_night_actions(game_state):
 
     for key, target in game_state.night_actions.items():
         if key.startswith('kill_'):
-            kills[int(key.split('_')[1])] = target
+            kills[extract_uid(key, 1)] = target
         elif key.startswith('protect_'):
-            protects[int(key.split('_')[1])] = target
+            protects[extract_uid(key, 1)] = target
         elif key.startswith('block_'):
-            blocks[int(key.split('_')[1])] = target
+            blocks[extract_uid(key, 1)] = target
         elif key.startswith('sheriff_'):
-            sheriff_kills[int(key.split('_')[1])] = target
+            sheriff_kills[extract_uid(key, 1)] = target
         elif key.startswith('neutral_kill_'):
-            kills[int(key.split('_')[1])] = target
+            kills[extract_uid(key, 2)] = target
 
     blocked_players = set(blocks.values())
 

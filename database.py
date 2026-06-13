@@ -248,7 +248,7 @@ def get_ai_memories(bot_id):
     cursor.execute('SELECT target_id, suspicion_score FROM ai_memories WHERE bot_id = ?', (bot_id,))
     results = cursor.fetchall()
     conn.close()
-    return {r['target_id']: r['suspicion_score'] for r in results}
+    return {str(r['target_id']): r['suspicion_score'] for r in results}
 
 def get_player_game_history(user_id, limit=5):
     conn = get_connection()
