@@ -21,7 +21,13 @@ from game_messages import (
     GAME_REPLAY_HEADER, GAME_REPLAY_ENTRY
 )
 
-bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
+bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN, parse_mode='Markdown')
+
+try:
+    bot.remove_webhook()
+    bot.get_updates(offset=-1)
+except Exception:
+    pass
 
 game_states = {}
 
@@ -1480,4 +1486,20 @@ def handle_message(message):
 
 print("🤖 BLACKOUT Production Engine Operational...")
 init_db()
-bot.infinity_polling()
+
+import signal
+import sys
+
+def handle_shutdown(signum, frame):
+    print("Shutting down gracefully...")
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, handle_shutdown)
+signal.signal(signal.SIGINT, handle_shutdown)
+
+while True:
+    try:
+        bot.infinity_polling(timeout=60, long_polling_timeout=60)
+    except Exception as e:
+        print(f"Polling error: {e}. Retrying in 10 seconds...")
+        time.sleep(10)
