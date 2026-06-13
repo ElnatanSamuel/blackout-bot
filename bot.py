@@ -1142,6 +1142,12 @@ def send_sheriff_prompt(game_state, uid):
         pass
 
 
+def corrupt_team():
+    return {'Blackout', 'Razor', 'Phantom', 'Thug'}
+
+def is_scan_clean(role):
+    return ROLE_DEFINITIONS.get(role, {}).get('scan_result') == 'CLEAN'
+
 def resolve_bot_night_actions(game_state):
     for uid, data in game_state.bots.items():
         if not data.get('is_alive', True):
@@ -1153,7 +1159,9 @@ def resolve_bot_night_actions(game_state):
             continue
 
         if role in ['Blackout', 'Razor', 'Thug']:
-            target = choose_bot_kill_target(game_state, uid, alive_targets)
+            non_corrupt = [(uid2, d2) for uid2, d2 in alive_targets if d2.get('role') not in corrupt_team()]
+            targets = non_corrupt if non_corrupt else alive_targets
+            target = choose_bot_kill_target(game_state, uid, targets)
             game_state.night_actions[f"kill_{uid}"] = target
         elif role == 'Phantom':
             if game_state.used_abilities.get(f"phantom_{uid}", 0) % 2 == 0:
@@ -1163,7 +1171,9 @@ def resolve_bot_night_actions(game_state):
         elif role in ['Virus', 'Wraith']:
             uses = game_state.virus_uses.get(uid, 0) if role == 'Virus' else game_state.wraith_uses.get(uid, 0)
             if uses < 2:
-                game_state.night_actions[f"neutral_kill_{uid}"] = choose_bot_kill_target(game_state, uid, alive_targets)
+                non_corrupt = [(uid2, d2) for uid2, d2 in alive_targets if d2.get('role') not in corrupt_team()]
+                targets = non_corrupt if non_corrupt else alive_targets
+                game_state.night_actions[f"neutral_kill_{uid}"] = choose_bot_kill_target(game_state, uid, targets)
                 if role == 'Virus':
                     game_state.virus_uses[uid] = game_state.virus_uses.get(uid, 0) + 1
                 else:
@@ -1175,35 +1185,42 @@ def resolve_bot_night_actions(game_state):
         elif role == 'Volt':
             last_protected = game_state.protection_history.get(uid, [])
             valid = [(uid2, d2) for uid2, d2 in alive_targets if uid2 not in last_protected[-2:]]
-            if valid:
-                target = random.choice(valid)[0]
-                game_state.night_actions[f"protect_{uid}"] = target
-                if uid not in game_state.protection_history:
-                    game_state.protection_history[uid] = []
-                game_state.protection_history[uid].append(target)
+            if not valid:
+                valid = alive_targets
+            clean_targets = [(uid2, d2) for uid2, d2 in valid if is_scan_clean(d2.get('role'))]
+            target = random.choice(clean_targets if clean_targets else valid)[0]
+            game_state.night_actions[f"protect_{uid}"] = target
+            if uid not in game_state.protection_history:
+                game_state.protection_history[uid] = []
+            game_state.protection_history[uid].append(target)
         elif role == 'Grid':
             last_scanned = game_state.scan_history.get(uid, [])
-            valid = [(uid2, d2) for uid2, d2 in alive_targets if uid2 not in last_scanned[-2:]]
-            if valid:
-                target = random.choice(valid)[0]
-                game_state.night_actions[f"scan_{uid}"] = target
-                if uid not in game_state.scan_history:
-                    game_state.scan_history[uid] = []
-                game_state.scan_history[uid].append(target)
+            unscanned = [(uid2, d2) for uid2, d2 in alive_targets if uid2 not in last_scanned]
+            suspicious = [(uid2, d2) for uid2, d2 in (unscanned if unscanned else alive_targets) if not is_scan_clean(d2.get('role'))]
+            target = random.choice(suspicious if suspicious else (unscanned if unscanned else alive_targets))[0]
+            game_state.night_actions[f"scan_{uid}"] = target
+            if uid not in game_state.scan_history:
+                game_state.scan_history[uid] = []
+            game_state.scan_history[uid].append(target)
         elif role == 'Bunker':
             last_blocked = game_state.block_history.get(uid, [])
             valid = [(uid2, d2) for uid2, d2 in alive_targets if uid2 not in last_blocked[-2:]]
-            if valid:
-                target = random.choice(valid)[0]
-                game_state.night_actions[f"block_{uid}"] = target
-                if uid not in game_state.block_history:
-                    game_state.block_history[uid] = []
-                game_state.block_history[uid].append(target)
+            if not valid:
+                valid = alive_targets
+            suspicious = [(uid2, d2) for uid2, d2 in valid if not is_scan_clean(d2.get('role'))]
+            target = random.choice(suspicious if suspicious else valid)[0]
+            game_state.night_actions[f"block_{uid}"] = target
+            if uid not in game_state.block_history:
+                game_state.block_history[uid] = []
+            game_state.block_history[uid].append(target)
         elif role == 'Sheriff':
-            game_state.night_actions[f"sheriff_{uid}"] = choose_bot_kill_target(game_state, uid, alive_targets)
+            clean_targets = [(uid2, d2) for uid2, d2 in alive_targets if not is_scan_clean(d2.get('role'))]
+            targets = clean_targets if clean_targets else alive_targets
+            game_state.night_actions[f"sheriff_{uid}"] = choose_bot_kill_target(game_state, uid, targets)
         elif role == 'Kernel':
             if not game_state.used_abilities.get(f"kernel_{uid}", False) and alive_targets:
-                target = random.choice(alive_targets)[0]
+                suspicious = [(uid2, d2) for uid2, d2 in alive_targets if not is_scan_clean(d2.get('role'))]
+                target = random.choice(suspicious if suspicious else alive_targets)[0]
                 game_state.night_actions[f"reveal_{uid}"] = target
                 game_state.used_abilities[f"kernel_{uid}"] = True
         elif role == 'Flare':
@@ -1211,7 +1228,8 @@ def resolve_bot_night_actions(game_state):
                 dead_players = [(uid2, d2) for uid2, d2 in game_state.players.items() if not d2.get('is_alive', True)] + \
                     [(uid2, d2) for uid2, d2 in game_state.bots.items() if not d2.get('is_alive', True)]
                 if dead_players:
-                    target = random.choice(dead_players)[0]
+                    ability_dead = [(uid2, d2) for uid2, d2 in dead_players if d2.get('role') in ROLE_POOLS['SURVIVOR_ABILITY']]
+                    target = random.choice(ability_dead if ability_dead else dead_players)[0]
                     game_state.night_actions[f"revive_{uid}"] = target
                     game_state.used_abilities[f"flare_{uid}"] = True
         elif role == 'Glitch':
@@ -1354,22 +1372,23 @@ def resolve_night_actions(game_state):
             elif flarer_uid in game_state.bots:
                 game_state.bots[flarer_uid]['is_alive'] = False
             kill_player(game_state.game_id, flarer_uid, game_state.current_round)
+            dead_this_round.append(flarer_uid)
         elif key.startswith('steal_'):
             glitcher_uid = extract_uid(key, 1)
             target_role = game_state.players.get(target, {}).get('role') or game_state.bots.get(target, {}).get('role')
             if glitcher_uid in game_state.players and target_role:
                 game_state.players[glitcher_uid]['role'] = target_role
 
+    game_state.dead_this_round = dead_this_round
+
 
 def start_dawn_phase(game_state):
     game_state.current_phase = 'DAWN'
 
     dead_this_round = []
-    for uid, data in game_state.players.items():
-        if not data.get('is_alive', True) and data.get('died_at_round') == game_state.current_round:
-            dead_this_round.append((uid, data))
-    for uid, data in game_state.bots.items():
-        if not data.get('is_alive', True) and data.get('died_at_round') == game_state.current_round:
+    for uid in game_state.dead_this_round:
+        data = game_state.players.get(uid) or game_state.bots.get(uid)
+        if data:
             dead_this_round.append((uid, data))
 
     if dead_this_round:
