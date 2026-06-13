@@ -57,6 +57,8 @@ class GameState:
         self.plague_infections = {}
         self.game_start_time = None
         self.last_human_message = ''
+        self.bot_brain = {}
+        self.last_night_deaths = []
 
     def can_message(self, user_id):
         now = datetime.now()
@@ -155,6 +157,106 @@ def extract_uid(data, prefix_parts=1):
         return int(uid_str)
     except ValueError:
         return uid_str
+
+
+def init_bot_brain(game_state):
+    for uid, data in game_state.bots.items():
+        game_state.bot_brain[uid] = {
+            'suspicion': {},
+            'known_roles': {},
+            'last_vote': None,
+            'mentioned_by_player': False,
+        }
+
+
+def find_mentioned_player(text, game_state):
+    text_lower = text.lower()
+    for uid, data in game_state.get_alive_players():
+        name = data.get('name', '').lower()
+        if name and name in text_lower:
+            return uid
+    return None
+
+
+def get_message_intent(text):
+    t = text.lower()
+    accusations = ['sus', 'corrupt', 'guilty', 'kill', 'vote out', 'exile', 'lying', 'liar']
+    defenses = ['trust', 'clean', 'innocent', 'clear', 'safe', 'believe', 'trustworthy']
+    if any(w in t for w in accusations):
+        return 'accuse'
+    if any(w in t for w in defenses):
+        return 'defend'
+    return 'neutral'
+
+
+def update_bot_suspicions(game_state, speaker_uid, text):
+    intent = get_message_intent(text)
+    target_uid = find_mentioned_player(text, game_state)
+    if target_uid is None:
+        return
+
+    for bot_uid, brain in game_state.bot_brain.items():
+        if bot_uid == speaker_uid:
+            continue
+        bot_data = game_state.bots.get(bot_uid)
+        if not bot_data or not bot_data.get('is_alive', True):
+            continue
+        is_corrupt = bot_data.get('role') in corrupt_team()
+        delta = 0
+        if intent == 'accuse':
+            delta = 2 if is_corrupt else 1
+        elif intent == 'defend':
+            delta = -1 if is_corrupt else -2
+        else:
+            delta = 1 if is_corrupt else 0
+        brain['suspicion'][target_uid] = brain['suspicion'].get(target_uid, 0) + delta
+
+
+def get_best_bot_responder(game_state, text):
+    intent = get_message_intent(text)
+    target_uid = find_mentioned_player(text, game_state)
+    alive_bots = [(uid, d) for uid, d in game_state.bots.items() if d.get('is_alive', True)]
+    if not alive_bots:
+        return None, None, None
+
+    scored = []
+    for uid, data in alive_bots:
+        brain = game_state.bot_brain.get(uid, {})
+        suspicion = brain.get('suspicion', {})
+        bot_corrupt = data.get('role') in corrupt_team()
+        score = random.uniform(0, 1)
+        if target_uid and suspicion.get(target_uid, 0) > 2:
+            score += 2
+        elif target_uid and suspicion.get(target_uid, 0) < -1:
+            score += 1
+        if intent == 'accuse' and bot_corrupt:
+            score += 1
+        scored.append((score, uid, data))
+
+    scored.sort(reverse=True)
+    score, uid, data = scored[0]
+    action = 'agree' if random.random() < 0.6 else 'quiet'
+    if intent == 'accuse':
+        action = 'agree'
+    elif intent == 'defend' and target_uid:
+        action = 'defend'
+    return uid, data, action
+
+
+def format_bot_response(game_state, uid, data, target_uid, action, text):
+    personality = data.get('personality', 'Quiet')
+    templates = BOT_CHAT_TEMPLATES.get(personality, BOT_CHAT_TEMPLATES['Quiet'])
+    alive = game_state.get_alive_players()
+    others = [(uid2, d2) for uid2, d2 in alive if uid2 != uid]
+    target_name = game_state.get_player_name(target_uid) if target_uid else 'someone'
+    accuser_name = random.choice([d2['name'] for uid2, d2 in others if uid2 != target_uid]) if others and target_uid else 'Someone'
+    truncated = (text[:80] + '...') if len(text) > 80 else text
+
+    template = templates.get(action, templates['quiet'])
+    try:
+        return template.format(bot=data['name'], target=target_name, accuser=accuser_name, message=truncated)
+    except KeyError:
+        return templates['quiet'].format(bot=data['name'], target=target_name, accuser=accuser_name, message=truncated)
 
 
 def assign_roles(game_state):
@@ -1394,6 +1496,11 @@ def start_dawn_phase(game_state):
         data = game_state.players.get(uid) or game_state.bots.get(uid)
         if data:
             dead_this_round.append((uid, data))
+            name = game_state.get_player_name(uid)
+            for bot_uid, brain in game_state.bot_brain.items():
+                for other_uid, _ in game_state.get_alive_players():
+                    if other_uid != bot_uid and other_uid != uid:
+                        brain['suspicion'][other_uid] = brain['suspicion'].get(other_uid, 0) + 0.5
 
     if dead_this_round:
         for uid, data in dead_this_round:
@@ -1409,42 +1516,11 @@ def start_dawn_phase(game_state):
     start_day_phase(game_state)
 
 
-def send_bot_chat_message(game_state, uid, data, target_uid=None, action=None, human_message=''):
-    personality = data.get('personality', 'Quiet')
-    templates = BOT_CHAT_TEMPLATES.get(personality, BOT_CHAT_TEMPLATES['Quiet'])
-    alive_players = game_state.get_alive_players()
-    other_players = [(uid2, d2) for uid2, d2 in alive_players if uid2 != uid]
-
-    if not other_players:
-        return
-
-    if target_uid is None:
-        target_uid, target_data = random.choice(other_players)
-    else:
-        target_data = game_state.players.get(target_uid) or game_state.bots.get(target_uid)
-
-    if action is None:
-        actions = ['accuse', 'agree', 'react', 'question', 'quiet'] if human_message else ['accuse', 'agree', 'quiet']
-        action = random.choice(actions)
-
-    template = templates.get(action, templates['quiet'])
-    accuser_name = random.choice([d2['name'] for uid2, d2 in other_players if uid2 != target_uid]) if other_players else 'Someone'
-    truncated = (human_message[:80] + '...') if len(human_message) > 80 else human_message
-
-    chat_text = template.format(
-        bot=data['name'],
-        target=game_state.get_player_name(target_uid) if target_uid else 'someone',
-        accuser=accuser_name,
-        message=truncated
-    )
-
-    game_state.send_to_creator(chat_text, parse_mode='Markdown')
-
-
 def start_day_phase(game_state):
     game_state.current_phase = 'DAY'
     game_state.votes = {}
     game_state.used_abilities = {}
+    init_bot_brain(game_state)
 
     game_state.send_to_creator("🗣️ *DAY PHASE* — 30s for discussion, then voting...", parse_mode='Markdown')
 
@@ -1454,15 +1530,23 @@ def start_day_phase(game_state):
         random.shuffle(alive_bots)
         for uid, data in alive_bots:
             elapsed = time.time() - start
-            if elapsed >= 25 or random.random() > 0.55:
-                continue
-            msg = game_state.last_human_message if random.random() < 0.4 else ''
-            target_uid = None
-            action = None
-            if msg:
-                target_uid = random.choice([uid2 for uid2, d2 in game_state.get_alive_players() if uid2 != uid] or [None])
-                action = random.choice(['react', 'question', 'accuse'])
-            send_bot_chat_message(game_state, uid, data, target_uid, action, msg)
+            if elapsed >= 25:
+                break
+            brain = game_state.bot_brain.get(uid, {})
+            suspicions = brain.get('suspicion', {})
+            target_uid = max(suspicions, key=suspicions.get) if suspicions else None
+            if target_uid is None:
+                others = [uid2 for uid2, d2 in game_state.get_alive_players() if uid2 != uid]
+                target_uid = random.choice(others) if others else None
+            action = 'quiet'
+            if suspicions.get(target_uid, 0) > 1:
+                action = 'accuse'
+            elif suspicions.get(target_uid, 0) < -1:
+                action = 'defend'
+            game_state.send_to_creator(
+                format_bot_response(game_state, uid, data, target_uid, action, ''),
+                parse_mode='Markdown'
+            )
             time.sleep(random.uniform(2, 4))
 
         remaining = 30 - (time.time() - start)
@@ -1496,8 +1580,16 @@ def bot_votes(game_state):
         if not data.get('is_alive', True):
             continue
         alive = [uid2 for uid2, d2 in game_state.get_alive_players() if uid2 != uid]
-        if alive:
-            game_state.votes[uid] = random.choice(alive)
+        if not alive:
+            continue
+        brain = game_state.bot_brain.get(uid, {})
+        suspicions = brain.get('suspicion', {})
+        if suspicions:
+            top_target = max(alive, key=lambda uid2: suspicions.get(uid2, 0))
+        else:
+            top_target = random.choice(alive)
+        game_state.votes[uid] = top_target
+        brain['last_vote'] = top_target
 
 
 def check_voting_complete(game_state):
@@ -1664,14 +1756,27 @@ def handle_message(message):
         game_state.last_human_message = text
         game_state.send_to_creator(f"🗣️ {name}: {text}")
 
-        alive_bots = [(uid, d) for uid, d in game_state.bots.items() if d.get('is_alive', True)]
-        if alive_bots and random.random() < 0.55:
-            uid, data = random.choice(alive_bots)
-            target_uid = random.choice([uid2 for uid2, d2 in game_state.get_alive_players() if uid2 != uid] or [None])
-            action = random.choice(['react', 'question', 'accuse', 'agree'])
+        update_bot_suspicions(game_state, user_id, text)
+
+        bot_uid, bot_data, action = get_best_bot_responder(game_state, text)
+        if bot_uid and bot_data:
+            target_uid = find_mentioned_player(text, game_state)
+            if target_uid is None:
+                alive_others = [uid2 for uid2, d2 in game_state.get_alive_players() if uid2 != bot_uid]
+                if alive_others:
+                    brain = game_state.bot_brain.get(bot_uid, {})
+                    suspicions = brain.get('suspicion', {})
+                    if suspicions:
+                        target_uid = max(suspicions, key=suspicions.get)
+                    else:
+                        target_uid = random.choice(alive_others)
+            final_uid, final_action = bot_uid, action
             Thread(target=lambda: (
                 time.sleep(random.uniform(1, 3)),
-                send_bot_chat_message(game_state, uid, data, target_uid, action, text)
+                game_state.send_to_creator(
+                    format_bot_response(game_state, final_uid, bot_data, target_uid, final_action, text),
+                    parse_mode='Markdown'
+                )
             ), daemon=True).start()
 
 
