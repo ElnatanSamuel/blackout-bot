@@ -74,7 +74,55 @@ def init_db():
     ''')
     
     conn.commit()
+    migrate_schema(conn)
     conn.close()
+
+def migrate_schema(conn):
+    cursor = conn.cursor()
+
+    cols = {row[1]: row[2] for row in cursor.execute('PRAGMA table_info(players)')}
+    if cols.get('user_id') != 'TEXT':
+        cursor.execute('''
+            CREATE TABLE players_new (
+                user_id TEXT PRIMARY KEY, username TEXT, is_ai BOOLEAN DEFAULT FALSE,
+                elo INTEGER DEFAULT 1000, games_played INTEGER DEFAULT 0,
+                wins INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('INSERT INTO players_new SELECT * FROM players')
+        cursor.execute('DROP TABLE players')
+        cursor.execute('ALTER TABLE players_new RENAME TO players')
+
+    cols = {row[1]: row[2] for row in cursor.execute('PRAGMA table_info(game_players)')}
+    if cols.get('user_id') != 'TEXT':
+        cursor.execute('''
+            CREATE TABLE game_players_new (
+                game_id INTEGER, user_id TEXT, role TEXT,
+                is_alive BOOLEAN DEFAULT TRUE, died_at_round INTEGER,
+                elo_change INTEGER DEFAULT 0,
+                PRIMARY KEY (game_id, user_id),
+                FOREIGN KEY (game_id) REFERENCES games(game_id),
+                FOREIGN KEY (user_id) REFERENCES players(user_id)
+            )
+        ''')
+        cursor.execute('INSERT INTO game_players_new SELECT * FROM game_players')
+        cursor.execute('DROP TABLE game_players')
+        cursor.execute('ALTER TABLE game_players_new RENAME TO game_players')
+
+    cols = {row[1]: row[2] for row in cursor.execute('PRAGMA table_info(games)')}
+    if cols.get('winner_id') != 'TEXT':
+        cursor.execute('''
+            CREATE TABLE games_new (
+                game_id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER,
+                corrupt_count INTEGER, start_time TIMESTAMP, end_time TIMESTAMP,
+                winner TEXT, winner_id TEXT
+            )
+        ''')
+        cursor.execute('INSERT INTO games_new SELECT * FROM games')
+        cursor.execute('DROP TABLE games')
+        cursor.execute('ALTER TABLE games_new RENAME TO games')
+
+    conn.commit()
 
 def save_player(user_id, username, is_ai=False):
     conn = get_connection()
