@@ -539,239 +539,309 @@ def handle_callback(call):
     user_id = call.from_user.id
     data = call.data
 
-    if data.startswith('lobby_'):
-        handle_lobby_callback(call)
-        return
+    try:
+        if data.startswith('lobby_'):
+            handle_lobby_callback(call)
+            return
 
-    if chat_id not in game_states:
-        bot.answer_callback_query(call.id, "No active game.")
-        return
+        if chat_id not in game_states:
+            bot.answer_callback_query(call.id, "No active game.")
+            return
 
-    game_state = game_states[chat_id]
+        game_state = game_states[chat_id]
 
-    if not game_state.can_message(user_id):
-        bot.answer_callback_query(call.id, "Slow down! Anti-spam active.")
-        return
+        if not game_state.can_message(user_id):
+            bot.answer_callback_query(call.id, "Slow down! Anti-spam active.")
+            return
 
-    if data.startswith('kill_'):
-        target_uid = int(data.split('_')[1])
-        game_state.night_actions[f"kill_{user_id}"] = target_uid
-        bot.answer_callback_query(call.id, f"Target: {game_state.get_player_name(target_uid)}")
-        bot.edit_message_text("✅ Target logged. Awaiting dawn...", chat_id, call.message.message_id)
+        if data.startswith('kill_'):
+            target_uid = int(data.split('_')[1])
+            game_state.night_actions[f"kill_{user_id}"] = target_uid
+            bot.answer_callback_query(call.id, f"Target: {game_state.get_player_name(target_uid)}")
+            try:
+                bot.edit_message_text("✅ Target logged. Awaiting dawn...", chat_id, call.message.message_id)
+            except Exception:
+                pass
 
-    elif data.startswith('neutral_kill_'):
-        target_uid = int(data.split('_')[2])
-        game_state.night_actions[f"neutral_kill_{user_id}"] = target_uid
-        role = game_state.players.get(user_id, {}).get('role')
-        if role == 'Virus':
-            game_state.virus_uses[user_id] = game_state.virus_uses.get(user_id, 0) + 1
-        elif role == 'Wraith':
-            game_state.wraith_uses[user_id] = game_state.wraith_uses.get(user_id, 0) + 1
-        bot.answer_callback_query(call.id, f"Target: {game_state.get_player_name(target_uid)}")
-        bot.edit_message_text("✅ Target logged. Awaiting dawn...", chat_id, call.message.message_id)
+        elif data.startswith('neutral_kill_'):
+            target_uid = int(data.split('_')[2])
+            game_state.night_actions[f"neutral_kill_{user_id}"] = target_uid
+            role = game_state.players.get(user_id, {}).get('role')
+            if role == 'Virus':
+                game_state.virus_uses[user_id] = game_state.virus_uses.get(user_id, 0) + 1
+            elif role == 'Wraith':
+                game_state.wraith_uses[user_id] = game_state.wraith_uses.get(user_id, 0) + 1
+            bot.answer_callback_query(call.id, f"Target: {game_state.get_player_name(target_uid)}")
+            try:
+                bot.edit_message_text("✅ Target logged. Awaiting dawn...", chat_id, call.message.message_id)
+            except Exception:
+                pass
 
-    elif data.startswith('mark_'):
-        target_uid = int(data.split('_')[1])
-        game_state.night_actions[f"mark_{user_id}"] = target_uid
-        bot.answer_callback_query(call.id, f"Marked: {game_state.get_player_name(target_uid)}")
-        bot.edit_message_text("✅ Target marked for Corrupt team.", chat_id, call.message.message_id)
+        elif data.startswith('mark_'):
+            target_uid = int(data.split('_')[1])
+            game_state.night_actions[f"mark_{user_id}"] = target_uid
+            bot.answer_callback_query(call.id, f"Marked: {game_state.get_player_name(target_uid)}")
+            try:
+                bot.edit_message_text("✅ Target marked for Corrupt team.", chat_id, call.message.message_id)
+            except Exception:
+                pass
 
-    elif data.startswith('protect_'):
-        target_uid = int(data.split('_')[1])
-        game_state.night_actions[f"protect_{user_id}"] = target_uid
-        if user_id not in game_state.protection_history:
-            game_state.protection_history[user_id] = []
-        game_state.protection_history[user_id].append(target_uid)
-        bot.answer_callback_query(call.id, f"Protecting: {game_state.get_player_name(target_uid)}")
-        bot.edit_message_text("✅ Protection active. Awaiting dawn...", chat_id, call.message.message_id)
+        elif data.startswith('protect_'):
+            target_uid = int(data.split('_')[1])
+            game_state.night_actions[f"protect_{user_id}"] = target_uid
+            if user_id not in game_state.protection_history:
+                game_state.protection_history[user_id] = []
+            game_state.protection_history[user_id].append(target_uid)
+            bot.answer_callback_query(call.id, f"Protecting: {game_state.get_player_name(target_uid)}")
+            try:
+                bot.edit_message_text("✅ Protection active. Awaiting dawn...", chat_id, call.message.message_id)
+            except Exception:
+                pass
 
-    elif data.startswith('scan_'):
-        target_uid = int(data.split('_')[1])
-        game_state.night_actions[f"scan_{user_id}"] = target_uid
-        if user_id not in game_state.scan_history:
-            game_state.scan_history[user_id] = []
-        game_state.scan_history[user_id].append(target_uid)
-        target_role = game_state.players.get(target_uid, {}).get('role') or game_state.bots.get(target_uid, {}).get('role')
-        scan_result = ROLE_DEFINITIONS.get(target_role, {}).get('scan_result', 'CLEAN')
+        elif data.startswith('scan_'):
+            target_uid = int(data.split('_')[1])
+            game_state.night_actions[f"scan_{user_id}"] = target_uid
+            if user_id not in game_state.scan_history:
+                game_state.scan_history[user_id] = []
+            game_state.scan_history[user_id].append(target_uid)
+            target_role = game_state.players.get(target_uid, {}).get('role') or game_state.bots.get(target_uid, {}).get('role')
+            scan_result = ROLE_DEFINITIONS.get(target_role, {}).get('scan_result', 'CLEAN')
+            try:
+                bot.send_message(user_id, f"🔍 Scan result: {game_state.get_player_name(target_uid)} is {scan_result}")
+            except Exception:
+                pass
+            bot.answer_callback_query(call.id, "Scan complete.")
+            try:
+                bot.edit_message_text(f"✅ {game_state.get_player_name(target_uid)} is {scan_result}", chat_id, call.message.message_id)
+            except Exception:
+                pass
+
+        elif data.startswith('block_'):
+            target_uid = int(data.split('_')[1])
+            game_state.night_actions[f"block_{user_id}"] = target_uid
+            if user_id not in game_state.block_history:
+                game_state.block_history[user_id] = []
+            game_state.block_history[user_id].append(target_uid)
+            bot.answer_callback_query(call.id, f"Blocked: {game_state.get_player_name(target_uid)}")
+            try:
+                bot.edit_message_text("✅ Block active. Awaiting dawn...", chat_id, call.message.message_id)
+            except Exception:
+                pass
+
+        elif data.startswith('reveal_'):
+            target_uid = int(data.split('_')[1])
+            game_state.used_abilities[f"kernel_{user_id}"] = True
+            target_role = game_state.players.get(target_uid, {}).get('role') or game_state.bots.get(target_uid, {}).get('role')
+            try:
+                bot.send_message(user_id, f"🔍 {game_state.get_player_name(target_uid)} is {target_role}")
+            except Exception:
+                pass
+            bot.answer_callback_query(call.id, "Role revealed.")
+            try:
+                bot.edit_message_text(f"✅ {game_state.get_player_name(target_uid)} is {target_role}", chat_id, call.message.message_id)
+            except Exception:
+                pass
+
+        elif data.startswith('revive_'):
+            target_uid = int(data.split('_')[1])
+            game_state.used_abilities[f"flare_{user_id}"] = True
+            if target_uid in game_state.players:
+                game_state.players[target_uid]['is_alive'] = True
+            elif target_uid in game_state.bots:
+                game_state.bots[target_uid]['is_alive'] = True
+            if user_id in game_state.players:
+                game_state.players[user_id]['is_alive'] = False
+            elif user_id in game_state.bots:
+                game_state.bots[user_id]['is_alive'] = False
+            kill_player(game_state.game_id, user_id, game_state.current_round)
+            try:
+                bot.send_message(target_uid, "You have been revived! You return with no abilities.")
+            except Exception:
+                pass
+            bot.answer_callback_query(call.id, "Player revived.")
+            try:
+                bot.edit_message_text(f"✅ {game_state.get_player_name(target_uid)} has been revived!", chat_id, call.message.message_id)
+            except Exception:
+                pass
+
+        elif data.startswith('sheriff_'):
+            target_uid = int(data.split('_')[1])
+            game_state.night_actions[f"sheriff_{user_id}"] = target_uid
+            bot.answer_callback_query(call.id, f"Target: {game_state.get_player_name(target_uid)}")
+            try:
+                bot.edit_message_text("✅ Execution ordered. Awaiting dawn...", chat_id, call.message.message_id)
+            except Exception:
+                pass
+
+        elif data.startswith('infect_'):
+            target_uid = int(data.split('_')[1])
+            game_state.night_actions[f"infect_{user_id}"] = target_uid
+            bot.answer_callback_query(call.id, f"Infected: {game_state.get_player_name(target_uid)}")
+            try:
+                bot.edit_message_text("✅ Infection spread. Awaiting dawn...", chat_id, call.message.message_id)
+            except Exception:
+                pass
+
+        elif data.startswith('steal_'):
+            target_uid = int(data.split('_')[1])
+            game_state.used_abilities[f"glitch_{user_id}"] = True
+            target_role = game_state.players.get(target_uid, {}).get('role') or game_state.bots.get(target_uid, {}).get('role')
+            if user_id in game_state.players:
+                game_state.players[user_id]['role'] = target_role
+            try:
+                bot.send_message(user_id, f"You stole the {target_role} ability!")
+            except Exception:
+                pass
+            bot.answer_callback_query(call.id, f"Stole {target_role} ability.")
+            try:
+                bot.edit_message_text(f"✅ You now have the {target_role} ability.", chat_id, call.message.message_id)
+            except Exception:
+                pass
+
+        elif data == 'vote_skip':
+            game_state.votes[user_id] = 'skip'
+            game_state.send_to_creator(VOTE_SKIP_PUBLIC_MESSAGE.format(username=game_state.get_player_name(user_id)))
+            bot.answer_callback_query(call.id, "Vote skipped.")
+            check_voting_complete(game_state)
+
+        elif data.startswith('vote_'):
+            target_uid = int(data.split('_')[1])
+            game_state.votes[user_id] = target_uid
+            game_state.send_to_creator(VOTE_PUBLIC_MESSAGE.format(
+                username=game_state.get_player_name(user_id),
+                target=game_state.get_player_name(target_uid)
+            ))
+            bot.answer_callback_query(call.id, f"Voted for {game_state.get_player_name(target_uid)}")
+            check_voting_complete(game_state)
+
+    except Exception as e:
+        print(f"Error in callback {data}: {e}")
         try:
-            bot.send_message(user_id, f"🔍 Scan result: {game_state.get_player_name(target_uid)} is {scan_result}")
+            bot.answer_callback_query(call.id, "Error. Try again.")
         except Exception:
             pass
-        bot.answer_callback_query(call.id, "Scan complete.")
-        bot.edit_message_text(f"✅ {game_state.get_player_name(target_uid)} is {scan_result}", chat_id, call.message.message_id)
-
-    elif data.startswith('block_'):
-        target_uid = int(data.split('_')[1])
-        game_state.night_actions[f"block_{user_id}"] = target_uid
-        if user_id not in game_state.block_history:
-            game_state.block_history[user_id] = []
-        game_state.block_history[user_id].append(target_uid)
-        bot.answer_callback_query(call.id, f"Blocked: {game_state.get_player_name(target_uid)}")
-        bot.edit_message_text("✅ Block active. Awaiting dawn...", chat_id, call.message.message_id)
-
-    elif data.startswith('reveal_'):
-        target_uid = int(data.split('_')[1])
-        game_state.used_abilities[f"kernel_{user_id}"] = True
-        target_role = game_state.players.get(target_uid, {}).get('role') or game_state.bots.get(target_uid, {}).get('role')
-        try:
-            bot.send_message(user_id, f"🔍 {game_state.get_player_name(target_uid)} is {target_role}")
-        except Exception:
-            pass
-        bot.answer_callback_query(call.id, "Role revealed.")
-        bot.edit_message_text(f"✅ {game_state.get_player_name(target_uid)} is {target_role}", chat_id, call.message.message_id)
-
-    elif data.startswith('revive_'):
-        target_uid = int(data.split('_')[1])
-        game_state.used_abilities[f"flare_{user_id}"] = True
-        if target_uid in game_state.players:
-            game_state.players[target_uid]['is_alive'] = True
-        elif target_uid in game_state.bots:
-            game_state.bots[target_uid]['is_alive'] = True
-        if user_id in game_state.players:
-            game_state.players[user_id]['is_alive'] = False
-        elif user_id in game_state.bots:
-            game_state.bots[user_id]['is_alive'] = False
-        kill_player(game_state.game_id, user_id, game_state.current_round)
-        try:
-            bot.send_message(target_uid, "You have been revived! You return with no abilities.")
-        except Exception:
-            pass
-        bot.answer_callback_query(call.id, "Player revived.")
-        bot.edit_message_text(f"✅ {game_state.get_player_name(target_uid)} has been revived!", chat_id, call.message.message_id)
-
-    elif data.startswith('sheriff_'):
-        target_uid = int(data.split('_')[1])
-        game_state.night_actions[f"sheriff_{user_id}"] = target_uid
-        bot.answer_callback_query(call.id, f"Target: {game_state.get_player_name(target_uid)}")
-        bot.edit_message_text("✅ Execution ordered. Awaiting dawn...", chat_id, call.message.message_id)
-
-    elif data.startswith('infect_'):
-        target_uid = int(data.split('_')[1])
-        game_state.night_actions[f"infect_{user_id}"] = target_uid
-        bot.answer_callback_query(call.id, f"Infected: {game_state.get_player_name(target_uid)}")
-        bot.edit_message_text("✅ Infection spread. Awaiting dawn...", chat_id, call.message.message_id)
-
-    elif data.startswith('steal_'):
-        target_uid = int(data.split('_')[1])
-        game_state.used_abilities[f"glitch_{user_id}"] = True
-        target_role = game_state.players.get(target_uid, {}).get('role') or game_state.bots.get(target_uid, {}).get('role')
-        if user_id in game_state.players:
-            game_state.players[user_id]['role'] = target_role
-        try:
-            bot.send_message(user_id, f"You stole the {target_role} ability!")
-        except Exception:
-            pass
-        bot.answer_callback_query(call.id, f"Stole {target_role} ability.")
-        bot.edit_message_text(f"✅ You now have the {target_role} ability.", chat_id, call.message.message_id)
-
-    elif data == 'vote_skip':
-        game_state.votes[user_id] = 'skip'
-        bot.send_message(chat_id, VOTE_SKIP_PUBLIC_MESSAGE.format(username=game_state.get_player_name(user_id)))
-        bot.answer_callback_query(call.id, "Vote skipped.")
-        check_voting_complete(game_state)
-
-    elif data.startswith('vote_'):
-        target_uid = int(data.split('_')[1])
-        game_state.votes[user_id] = target_uid
-        bot.send_message(chat_id, VOTE_PUBLIC_MESSAGE.format(
-            username=game_state.get_player_name(user_id),
-            target=game_state.get_player_name(target_uid)
-        ))
-        bot.answer_callback_query(call.id, f"Voted for {game_state.get_player_name(target_uid)}")
-        check_voting_complete(game_state)
 
 
 def handle_lobby_callback(call):
     chat_id = call.message.chat.id
     user_id = call.from_user.id
     data = call.data
+    is_dm = (chat_id == user_id)
 
-    if chat_id not in game_states:
-        game_states[chat_id] = GameState(chat_id, user_id, 1)
+    try:
+        if chat_id not in game_states:
+            game_states[chat_id] = GameState(chat_id, user_id, 1)
 
-    game_state = game_states[chat_id]
+        game_state = game_states[chat_id]
 
-    if data == 'lobby_join':
-        if user_id in game_state.players:
-            bot.answer_callback_query(call.id, "You're already in the lobby.")
-            return
+        if data == 'lobby_join':
+            if user_id in game_state.players:
+                bot.answer_callback_query(call.id, "You're already in the lobby.")
+                return
+            if len(game_state.players) + len(game_state.bots) >= GAME_SETTINGS['PLAYER_COUNT']:
+                bot.answer_callback_query(call.id, "Lobby is full.")
+                return
+            game_state.players[user_id] = {
+                'name': call.from_user.first_name or call.from_user.username or f'User_{user_id}',
+                'role': None,
+                'is_alive': True,
+                'elo': get_player(user_id)['elo'] if get_player(user_id) else GAME_SETTINGS['INITIAL_ELO']
+            }
+            save_player(user_id, game_state.players[user_id]['name'])
+            bot.answer_callback_query(call.id, "You joined!")
+            send_lobby_buttons(game_state)
 
-        if len(game_state.players) + len(game_state.bots) >= GAME_SETTINGS['PLAYER_COUNT']:
-            bot.answer_callback_query(call.id, "Lobby is full.")
-            return
+        elif data == 'lobby_leave':
+            if user_id not in game_state.players:
+                bot.answer_callback_query(call.id, "You're not in the lobby.")
+                return
+            del game_state.players[user_id]
+            bot.answer_callback_query(call.id, "You left.")
+            send_lobby_buttons(game_state)
 
-        game_state.players[user_id] = {
-            'name': call.from_user.first_name or call.from_user.username or f'User_{user_id}',
-            'role': None,
-            'is_alive': True,
-            'elo': get_player(user_id)['elo'] if get_player(user_id) else GAME_SETTINGS['INITIAL_ELO']
-        }
-        save_player(user_id, game_state.players[user_id]['name'])
-        bot.answer_callback_query(call.id, "You joined!")
-        send_lobby_buttons(game_state)
+        elif data == 'lobby_add_bots':
+            handle_add_bots(chat_id, user_id)
+            bot.answer_callback_query(call.id, "Bots added!")
 
-    elif data == 'lobby_leave':
-        if user_id not in game_state.players:
-            bot.answer_callback_query(call.id, "You're not in the lobby.")
-            return
-        del game_state.players[user_id]
-        bot.answer_callback_query(call.id, "You left.")
-        send_lobby_buttons(game_state)
+        elif data == 'lobby_start':
+            if len(game_state.players) + len(game_state.bots) < 4:
+                bot.answer_callback_query(call.id, "Need at least 4 players.")
+                return
+            bot.answer_callback_query(call.id, "Starting game!")
+            start_game(game_state)
 
-    elif data == 'lobby_add_bots':
-        handle_add_bots(chat_id, user_id)
-        bot.answer_callback_query(call.id, "Bots added!")
+        elif data == 'lobby_solo':
+            bot.answer_callback_query(call.id, "Starting solo game!")
+            start_solo_game(chat_id, user_id)
 
-    elif data == 'lobby_start':
-        if len(game_state.players) + len(game_state.bots) < 4:
-            bot.answer_callback_query(call.id, "Need at least 4 players.")
-            return
-        bot.answer_callback_query(call.id, "Starting game!")
-        start_game(game_state)
+        elif data == 'lobby_start_group':
+            if is_dm:
+                bot.answer_callback_query(call.id, "Create a group, add me, then use /join there!")
+                try:
+                    bot.send_message(user_id,
+                        "To play with friends:\n\n"
+                        "1. Create a Telegram group\n"
+                        "2. Add me to the group\n"
+                        "3. Send /start in the group\n"
+                        "4. Click Join Game\n"
+                        "5. Click Add Bots\n"
+                        "6. Click Start Game",
+                        parse_mode='Markdown')
+                except Exception:
+                    pass
+            else:
+                if len(game_state.players) + len(game_state.bots) < 4:
+                    bot.answer_callback_query(call.id, "Need at least 4 players.")
+                    return
+                bot.answer_callback_query(call.id, "Starting game!")
+                start_game(game_state)
 
-    elif data == 'lobby_solo':
-        bot.answer_callback_query(call.id, "Starting solo game!")
-        start_solo_game(chat_id, user_id)
+        elif data == 'lobby_help':
+            try:
+                bot.send_message(user_id, HELP_MESSAGE, parse_mode='Markdown')
+                bot.answer_callback_query(call.id, "Help sent to your DMs!")
+            except Exception:
+                bot.answer_callback_query(call.id, "Start a PM with me first!")
 
-    elif data == 'lobby_help':
+        elif data == 'lobby_stats':
+            player = get_player(user_id)
+            if not player:
+                bot.answer_callback_query(call.id, "No games played yet.")
+                return
+            win_rate = (player['wins'] / player['games_played'] * 100) if player['games_played'] > 0 else 0
+            try:
+                bot.send_message(user_id, STATS_MESSAGE.format(
+                    username=player['username'], elo=player['elo'],
+                    games_played=player['games_played'], wins=player['wins'],
+                    win_rate=round(win_rate, 1)
+                ), parse_mode='Markdown')
+                bot.answer_callback_query(call.id, "Stats sent!")
+            except Exception:
+                bot.answer_callback_query(call.id, "Start a PM with me first!")
+
+        elif data == 'lobby_leaderboard':
+            leaders = get_leaderboard(10)
+            if not leaders:
+                bot.answer_callback_query(call.id, "No players yet.")
+                return
+            entries = []
+            for i, player in enumerate(leaders, 1):
+                entries.append(LEADERBOARD_ENTRY.format(
+                    position=i, username=player['username'],
+                    elo=player['elo'], wins=player['wins']
+                ))
+            try:
+                bot.send_message(user_id, LEADERBOARD_MESSAGE.format(entries="\n".join(entries)), parse_mode='Markdown')
+                bot.answer_callback_query(call.id, "Leaderboard sent!")
+            except Exception:
+                bot.answer_callback_query(call.id, "Start a PM with me first!")
+
+    except Exception as e:
+        print(f"Error in lobby callback {data}: {e}")
         try:
-            bot.send_message(user_id, HELP_MESSAGE, parse_mode='Markdown')
-            bot.answer_callback_query(call.id, "Help sent to your DMs!")
+            bot.answer_callback_query(call.id, "Something went wrong. Try again.")
         except Exception:
-            bot.answer_callback_query(call.id, "Start a PM with me first!")
-
-    elif data == 'lobby_stats':
-        player = get_player(user_id)
-        if not player:
-            bot.answer_callback_query(call.id, "No games played yet.")
-            return
-        win_rate = (player['wins'] / player['games_played'] * 100) if player['games_played'] > 0 else 0
-        try:
-            bot.send_message(user_id, STATS_MESSAGE.format(
-                username=player['username'], elo=player['elo'],
-                games_played=player['games_played'], wins=player['wins'],
-                win_rate=round(win_rate, 1)
-            ), parse_mode='Markdown')
-            bot.answer_callback_query(call.id, "Stats sent!")
-        except Exception:
-            bot.answer_callback_query(call.id, "Start a PM with me first!")
-
-    elif data == 'lobby_leaderboard':
-        leaders = get_leaderboard(10)
-        if not leaders:
-            bot.answer_callback_query(call.id, "No players yet.")
-            return
-        entries = []
-        for i, player in enumerate(leaders, 1):
-            entries.append(LEADERBOARD_ENTRY.format(
-                position=i, username=player['username'],
-                elo=player['elo'], wins=player['wins']
-            ))
-        try:
-            bot.send_message(user_id, LEADERBOARD_MESSAGE.format(entries="\n".join(entries)), parse_mode='Markdown')
-            bot.answer_callback_query(call.id, "Leaderboard sent!")
-        except Exception:
-            bot.answer_callback_query(call.id, "Start a PM with me first!")
+            pass
 
 
 # ---------------------------------------------------------------------------
