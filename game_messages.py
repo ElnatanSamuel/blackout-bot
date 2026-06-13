@@ -330,24 +330,32 @@ BOT_CHAT_TEMPLATES = {
         'accuse': "🤖 {bot} says: {target} is acting sus. Vote them out!",
         'defend': "🤖 {bot} says: I'm clean. Why would I betray my own team?",
         'agree': "🤖 {bot} says: {accuser} is right about {target}. Let's exile them.",
+        'react': "🤖 {bot} says: '{message}'? That's exactly what a Corrupt would say, {target}.",
+        'question': "🤖 {bot} says: {target}, you really believe '{message}'? Sus.",
         'quiet': "🤖 {bot} says: I'm watching. Someone's gotta make a move."
     },
     'Cautious': {
         'accuse': "🤖 {bot} says: Can someone scan {target}? Need more info.",
         'defend': "🤖 {bot} says: I haven't done anything suspicious. Check my votes.",
         'agree': "🤖 {bot} says: {accuser} makes a good point about {target}.",
+        'react': "🤖 {bot} says: {target}, what do you mean by '{message}'? Explain.",
+        'question': "🤖 {bot} says: {target}, can you clarify '{message}'?",
         'quiet': "🤖 {bot} says: Hmm... need to think about this."
     },
     'Quiet': {
         'accuse': "🤖 {bot} says: {target} maybe?",
         'defend': "🤖 {bot} says: I'm good.",
         'agree': "🤖 {bot} says: Yeah.",
+        'react': "🤖 {bot} says: '{message}' ...ok.",
+        'question': "🤖 {bot} says: {target} said '{message}'... thoughts?",
         'quiet': "🤖 {bot} says: ..."
     },
     'Strategic': {
         'accuse': "🤖 {bot} says: {target}'s voting pattern matches Corrupt behavior.",
         'defend': "🤖 {bot} says: My voting record is clean. I've been helping.",
         'agree': "🤖 {bot} says: {accuser} is onto something. {target} needs to explain.",
+        'react': "🤖 {bot} says: '{message}' doesn't align with {target}'s previous statements.",
+        'question': "🤖 {bot} says: {target}, your claim '{message}' needs evidence.",
         'quiet': "🤖 {bot} says: Analyzing the data..."
     }
 }

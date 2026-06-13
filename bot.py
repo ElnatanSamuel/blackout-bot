@@ -56,6 +56,7 @@ class GameState:
         self.wraith_uses = {}
         self.plague_infections = {}
         self.game_start_time = None
+        self.last_human_message = ''
 
     def can_message(self, user_id):
         now = datetime.now()
@@ -1408,7 +1409,7 @@ def start_dawn_phase(game_state):
     start_day_phase(game_state)
 
 
-def send_bot_chat_message(game_state, uid, data, target_uid=None, action=None):
+def send_bot_chat_message(game_state, uid, data, target_uid=None, action=None, human_message=''):
     personality = data.get('personality', 'Quiet')
     templates = BOT_CHAT_TEMPLATES.get(personality, BOT_CHAT_TEMPLATES['Quiet'])
     alive_players = game_state.get_alive_players()
@@ -1423,15 +1424,18 @@ def send_bot_chat_message(game_state, uid, data, target_uid=None, action=None):
         target_data = game_state.players.get(target_uid) or game_state.bots.get(target_uid)
 
     if action is None:
-        action = random.choice(['accuse', 'agree', 'quiet'])
+        actions = ['accuse', 'agree', 'react', 'question', 'quiet'] if human_message else ['accuse', 'agree', 'quiet']
+        action = random.choice(actions)
 
     template = templates.get(action, templates['quiet'])
     accuser_name = random.choice([d2['name'] for uid2, d2 in other_players if uid2 != target_uid]) if other_players else 'Someone'
+    truncated = (human_message[:80] + '...') if len(human_message) > 80 else human_message
 
     chat_text = template.format(
         bot=data['name'],
         target=game_state.get_player_name(target_uid) if target_uid else 'someone',
-        accuser=accuser_name
+        accuser=accuser_name,
+        message=truncated
     )
 
     game_state.send_to_creator(chat_text, parse_mode='Markdown')
@@ -1452,7 +1456,13 @@ def start_day_phase(game_state):
             elapsed = time.time() - start
             if elapsed >= 25 or random.random() > 0.55:
                 continue
-            send_bot_chat_message(game_state, uid, data)
+            msg = game_state.last_human_message if random.random() < 0.4 else ''
+            target_uid = None
+            action = None
+            if msg:
+                target_uid = random.choice([uid2 for uid2, d2 in game_state.get_alive_players() if uid2 != uid] or [None])
+                action = random.choice(['react', 'question', 'accuse'])
+            send_bot_chat_message(game_state, uid, data, target_uid, action, msg)
             time.sleep(random.uniform(2, 4))
 
         remaining = 30 - (time.time() - start)
@@ -1650,14 +1660,19 @@ def handle_message(message):
         if player_data and not player_data.get('is_alive', True):
             return
         name = game_state.get_player_name(user_id)
-        game_state.send_to_creator(f"🗣️ {name}: {message.text}")
+        text = message.text
+        game_state.last_human_message = text
+        game_state.send_to_creator(f"🗣️ {name}: {text}")
 
         alive_bots = [(uid, d) for uid, d in game_state.bots.items() if d.get('is_alive', True)]
-        if alive_bots and random.random() < 0.5:
+        if alive_bots and random.random() < 0.55:
             uid, data = random.choice(alive_bots)
             target_uid = random.choice([uid2 for uid2, d2 in game_state.get_alive_players() if uid2 != uid] or [None])
-            action = random.choice(['accuse', 'agree'])
-            Thread(target=lambda: (time.sleep(random.uniform(1, 3)), send_bot_chat_message(game_state, uid, data, target_uid, action)), daemon=True).start()
+            action = random.choice(['react', 'question', 'accuse', 'agree'])
+            Thread(target=lambda: (
+                time.sleep(random.uniform(1, 3)),
+                send_bot_chat_message(game_state, uid, data, target_uid, action, text)
+            ), daemon=True).start()
 
 
 print("🤖 BLACKOUT Production Engine Operational...")
