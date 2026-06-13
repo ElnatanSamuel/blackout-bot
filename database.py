@@ -14,7 +14,7 @@ def init_db():
     
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS players (
-            user_id INTEGER PRIMARY KEY,
+            user_id TEXT PRIMARY KEY,
             username TEXT,
             is_ai BOOLEAN DEFAULT FALSE,
             elo INTEGER DEFAULT 1000,
@@ -32,14 +32,14 @@ def init_db():
             start_time TIMESTAMP,
             end_time TIMESTAMP,
             winner TEXT,
-            winner_id INTEGER
+            winner_id TEXT
         )
     ''')
     
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS game_players (
             game_id INTEGER,
-            user_id INTEGER,
+            user_id TEXT,
             role TEXT,
             is_alive BOOLEAN DEFAULT TRUE,
             died_at_round INTEGER,
@@ -79,16 +79,16 @@ def save_player(user_id, username, is_ai=False):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT OR IGNORE INTO players (user_id, username, is_ai)
+        INSERT OR REPLACE INTO players (user_id, username, is_ai)
         VALUES (?, ?, ?)
-    ''', (user_id, username, is_ai))
+    ''', (str(user_id), username, is_ai))
     conn.commit()
     conn.close()
 
 def update_player_elo(user_id, elo_change):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute('UPDATE players SET elo = elo + ? WHERE user_id = ?', (elo_change, user_id))
+    cursor.execute('UPDATE players SET elo = elo + ? WHERE user_id = ?', (elo_change, str(user_id)))
     conn.commit()
     conn.close()
 
@@ -99,16 +99,16 @@ def increment_player_stats(user_id, won):
         cursor.execute('''
             UPDATE players SET games_played = games_played + 1, wins = wins + 1 
             WHERE user_id = ?
-        ''', (user_id,))
+        ''', (str(user_id),))
     else:
-        cursor.execute('UPDATE players SET games_played = games_played + 1 WHERE user_id = ?', (user_id,))
+        cursor.execute('UPDATE players SET games_played = games_played + 1 WHERE user_id = ?', (str(user_id),))
     conn.commit()
     conn.close()
 
 def get_player(user_id):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM players WHERE user_id = ?', (user_id,))
+    cursor.execute('SELECT * FROM players WHERE user_id = ?', (str(user_id),))
     result = cursor.fetchone()
     conn.close()
     return dict(result) if result else None
@@ -145,7 +145,7 @@ def end_game(game_id, winner, winner_id=None):
     cursor.execute('''
         UPDATE games SET end_time = ?, winner = ?, winner_id = ?
         WHERE game_id = ?
-    ''', (datetime.now(), winner, winner_id, game_id))
+    ''', (datetime.now(), winner, str(winner_id) if winner_id else None, game_id))
     conn.commit()
     conn.close()
 
@@ -155,7 +155,7 @@ def add_game_player(game_id, user_id, role):
     cursor.execute('''
         INSERT INTO game_players (game_id, user_id, role)
         VALUES (?, ?, ?)
-    ''', (game_id, user_id, role))
+    ''', (game_id, str(user_id), role))
     conn.commit()
     conn.close()
 
@@ -165,7 +165,7 @@ def kill_player(game_id, user_id, round_num):
     cursor.execute('''
         UPDATE game_players SET is_alive = FALSE, died_at_round = ?
         WHERE game_id = ? AND user_id = ?
-    ''', (round_num, game_id, user_id))
+    ''', (round_num, game_id, str(user_id)))
     conn.commit()
     conn.close()
 
@@ -260,7 +260,7 @@ def get_player_game_history(user_id, limit=5):
         WHERE gp.user_id = ?
         ORDER BY g.start_time DESC
         LIMIT ?
-    ''', (user_id, limit))
+    ''', (str(user_id), limit))
     results = cursor.fetchall()
     conn.close()
     return [dict(r) for r in results]
