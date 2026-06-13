@@ -226,7 +226,7 @@ DAWN_MESSAGES = {
 }
 
 NIGHT_MESSAGES = {
-    'night_start': "🌙 *Night falls.* Corrupt, choose your target.",
+    'night_start': "🌙 *Night falls.* Abilities activate...",
     'night_end': "☀️ *Night ends.* Preparing dawn report...",
     'choose_target': "Choose your target:",
     'ability_prompt': "Use your ability:",
