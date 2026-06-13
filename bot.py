@@ -947,6 +947,8 @@ def start_game(game_state):
         send_role_briefings(game_state)
 
         game_state.send_to_creator(START_TALE, parse_mode='Markdown')
+        game_state.send_to_creator("⏳ *15 seconds to study your role...*", parse_mode='Markdown')
+        time.sleep(15)
         start_night_phase(game_state)
     except Exception as e:
         print(f"Error in start_game: {e}")
@@ -993,7 +995,7 @@ def start_night_phase(game_state):
     resolve_bot_night_actions(game_state)
 
     def dawn_job():
-        time.sleep(4)
+        time.sleep(30)
         resolve_night_actions(game_state)
         start_dawn_phase(game_state)
 
@@ -1199,6 +1201,27 @@ def resolve_bot_night_actions(game_state):
                 game_state.block_history[uid].append(target)
         elif role == 'Sheriff':
             game_state.night_actions[f"sheriff_{uid}"] = choose_bot_kill_target(game_state, uid, alive_targets)
+        elif role == 'Kernel':
+            if not game_state.used_abilities.get(f"kernel_{uid}", False) and alive_targets:
+                target = random.choice(alive_targets)[0]
+                game_state.night_actions[f"reveal_{uid}"] = target
+                game_state.used_abilities[f"kernel_{uid}"] = True
+        elif role == 'Flare':
+            if not game_state.used_abilities.get(f"flare_{uid}", False):
+                dead_players = [(uid2, d2) for uid2, d2 in game_state.players.items() if not d2.get('is_alive', True)] + \
+                    [(uid2, d2) for uid2, d2 in game_state.bots.items() if not d2.get('is_alive', True)]
+                if dead_players:
+                    target = random.choice(dead_players)[0]
+                    game_state.night_actions[f"revive_{uid}"] = target
+                    game_state.used_abilities[f"flare_{uid}"] = True
+        elif role == 'Glitch':
+            if not game_state.used_abilities.get(f"glitch_{uid}", False):
+                dead_with_abilities = [(uid2, d2) for uid2, d2 in game_state.players.items() if not d2.get('is_alive', True) and d2.get('role') in ROLE_POOLS['SURVIVOR_ABILITY']] + \
+                    [(uid2, d2) for uid2, d2 in game_state.bots.items() if not d2.get('is_alive', True) and d2.get('role') in ROLE_POOLS['SURVIVOR_ABILITY']]
+                if dead_with_abilities:
+                    target = random.choice(dead_with_abilities)[0]
+                    game_state.night_actions[f"steal_{uid}"] = target
+                    game_state.used_abilities[f"glitch_{uid}"] = True
 
 
 def choose_bot_kill_target(game_state, bot_uid, alive_targets):
@@ -1319,6 +1342,24 @@ def resolve_night_actions(game_state):
                 pass
             log_game_event(game_state.game_id, game_state.current_round, 'SHERIFF_DEATH', {'sheriff': sheriff_uid, 'target': target_uid, 'result': 'INNOCENT'})
 
+    for key, target in list(game_state.night_actions.items()):
+        if key.startswith('revive_'):
+            flarer_uid = extract_uid(key, 1)
+            if target in game_state.players:
+                game_state.players[target]['is_alive'] = True
+            elif target in game_state.bots:
+                game_state.bots[target]['is_alive'] = True
+            if flarer_uid in game_state.players:
+                game_state.players[flarer_uid]['is_alive'] = False
+            elif flarer_uid in game_state.bots:
+                game_state.bots[flarer_uid]['is_alive'] = False
+            kill_player(game_state.game_id, flarer_uid, game_state.current_round)
+        elif key.startswith('steal_'):
+            glitcher_uid = extract_uid(key, 1)
+            target_role = game_state.players.get(target, {}).get('role') or game_state.bots.get(target, {}).get('role')
+            if glitcher_uid in game_state.players and target_role:
+                game_state.players[glitcher_uid]['role'] = target_role
+
 
 def start_dawn_phase(game_state):
     game_state.current_phase = 'DAWN'
@@ -1350,11 +1391,11 @@ def start_day_phase(game_state):
     game_state.votes = {}
     game_state.used_abilities = {}
 
-    game_state.send_to_creator("🗣️ *DAY PHASE* — Discuss and vote. Bots are analyzing...", parse_mode='Markdown')
+    game_state.send_to_creator("🗣️ *DAY PHASE* — 30s for discussion, then voting...", parse_mode='Markdown')
 
     def run_day():
+        time.sleep(30)
         run_bot_chat(game_state)
-        time.sleep(5)
         send_voting_phase(game_state)
 
     Thread(target=run_day, daemon=True).start()
@@ -1417,6 +1458,9 @@ def bot_votes(game_state):
 
 
 def check_voting_complete(game_state):
+    if game_state.solo_mode:
+        return
+
     alive = game_state.get_alive_players()
     alive_humans = [uid for uid, d in alive if not game_state.is_ai(uid)]
 
