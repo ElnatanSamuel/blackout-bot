@@ -1405,6 +1405,35 @@ def start_dawn_phase(game_state):
     start_day_phase(game_state)
 
 
+def send_bot_chat_message(game_state, uid, data, target_uid=None, action=None):
+    personality = data.get('personality', 'Quiet')
+    templates = BOT_CHAT_TEMPLATES.get(personality, BOT_CHAT_TEMPLATES['Quiet'])
+    alive_players = game_state.get_alive_players()
+    other_players = [(uid2, d2) for uid2, d2 in alive_players if uid2 != uid]
+
+    if not other_players:
+        return
+
+    if target_uid is None:
+        target_uid, target_data = random.choice(other_players)
+    else:
+        target_data = game_state.players.get(target_uid) or game_state.bots.get(target_uid)
+
+    if action is None:
+        action = random.choice(['accuse', 'agree', 'quiet'])
+
+    template = templates.get(action, templates['quiet'])
+    accuser_name = random.choice([d2['name'] for uid2, d2 in other_players if uid2 != target_uid]) if other_players else 'Someone'
+
+    chat_text = template.format(
+        bot=data['name'],
+        target=game_state.get_player_name(target_uid) if target_uid else 'someone',
+        accuser=accuser_name
+    )
+
+    game_state.send_to_creator(chat_text, parse_mode='Markdown')
+
+
 def start_day_phase(game_state):
     game_state.current_phase = 'DAY'
     game_state.votes = {}
@@ -1413,40 +1442,22 @@ def start_day_phase(game_state):
     game_state.send_to_creator("🗣️ *DAY PHASE* — 30s for discussion, then voting...", parse_mode='Markdown')
 
     def run_day():
-        time.sleep(30)
-        run_bot_chat(game_state)
+        start = time.time()
+        alive_bots = [(uid, d) for uid, d in game_state.bots.items() if d.get('is_alive', True)]
+        random.shuffle(alive_bots)
+        for uid, data in alive_bots:
+            elapsed = time.time() - start
+            if elapsed >= 25 or random.random() > 0.55:
+                continue
+            send_bot_chat_message(game_state, uid, data)
+            time.sleep(random.uniform(2, 4))
+
+        remaining = 30 - (time.time() - start)
+        if remaining > 0:
+            time.sleep(remaining)
         send_voting_phase(game_state)
 
     Thread(target=run_day, daemon=True).start()
-
-
-def run_bot_chat(game_state):
-    for uid, data in game_state.bots.items():
-        if not data.get('is_alive', True):
-            continue
-        if random.random() > 0.5:
-            continue
-
-        personality = data.get('personality', 'Quiet')
-        templates = BOT_CHAT_TEMPLATES.get(personality, BOT_CHAT_TEMPLATES['Quiet'])
-        alive_players = game_state.get_alive_players()
-        other_players = [(uid2, d2) for uid2, d2 in alive_players if uid2 != uid]
-
-        if not other_players:
-            continue
-
-        target_uid, target_data = random.choice(other_players)
-        action = random.choice(['accuse', 'agree', 'quiet'])
-        template = templates.get(action, templates['quiet'])
-
-        chat_text = template.format(
-            bot=data['name'],
-            target=game_state.get_player_name(target_uid),
-            accuser=random.choice([d2['name'] for uid2, d2 in other_players if uid2 != target_uid])
-        )
-
-        game_state.send_to_creator(chat_text, parse_mode='Markdown')
-        time.sleep(random.uniform(1, 2))
 
 
 def send_voting_phase(game_state):
@@ -1634,6 +1645,13 @@ def handle_message(message):
             return
         name = game_state.get_player_name(user_id)
         game_state.send_to_creator(f"🗣️ {name}: {message.text}")
+
+        alive_bots = [(uid, d) for uid, d in game_state.bots.items() if d.get('is_alive', True)]
+        if alive_bots and random.random() < 0.5:
+            uid, data = random.choice(alive_bots)
+            target_uid = random.choice([uid2 for uid2, d2 in game_state.get_alive_players() if uid2 != uid] or [None])
+            action = random.choice(['accuse', 'agree'])
+            Thread(target=lambda: (time.sleep(random.uniform(1, 3)), send_bot_chat_message(game_state, uid, data, target_uid, action)), daemon=True).start()
 
 
 print("🤖 BLACKOUT Production Engine Operational...")
