@@ -185,34 +185,50 @@ def assign_roles(game_state):
 
 
 def send_role_briefings(game_state):
-    corrupt_names = []
-    for uid, data in game_state.get_alive_corrupt():
-        corrupt_names.append(game_state.get_player_name(uid))
+    try:
+        corrupt_names = []
+        for uid, data in game_state.get_alive_corrupt():
+            corrupt_names.append(game_state.get_player_name(uid))
 
-    for uid, data in game_state.players.items():
-        role = data.get('role')
-        if not role:
-            continue
+        for uid, data in game_state.players.items():
+            try:
+                role = data.get('role')
+                if not role:
+                    continue
 
-        teammates = ', '.join([name for name in corrupt_names if name != game_state.get_player_name(uid)]) if role in ['Blackout', 'Razor', 'Phantom', 'Thug'] else ''
+                teammates = ', '.join([name for name in corrupt_names if name != game_state.get_player_name(uid)]) if role in ['Blackout', 'Razor', 'Phantom', 'Thug'] else ''
 
-        targets = []
-        if role == 'Virus':
-            potential_targets = [uid2 for uid2, d2 in game_state.players.items() if uid2 != uid and d2.get('role') not in ['Blackout', 'Razor', 'Phantom', 'Thug']]
-            targets = random.sample(potential_targets, min(3, len(potential_targets)))
-            targets = [game_state.get_player_name(t) for t in targets]
+                targets = []
+                if role == 'Virus':
+                    potential_targets = [uid2 for uid2, d2 in game_state.players.items() if uid2 != uid and d2.get('role') not in ['Blackout', 'Razor', 'Phantom', 'Thug']]
+                    targets = random.sample(potential_targets, min(3, len(potential_targets)))
+                    targets = [game_state.get_player_name(t) for t in targets]
 
-        briefing = ROLE_BRIEFINGS.get(role, '').format(
-            teammates=teammates,
-            targets=', '.join(targets) if targets else ''
-        )
+                briefing = ROLE_BRIEFINGS.get(role, f"You are {role}").format(
+                    teammates=teammates,
+                    targets=', '.join(targets) if targets else 'None'
+                )
 
-        try:
-            bot.send_message(uid, briefing, parse_mode='Markdown')
-        except Exception:
-            game_state.send_to_creator(
-                f"Warning: Couldn't DM {game_state.get_player_name(uid)}. Make sure you started a PM with this bot!",
-                parse_mode='Markdown')
+                try:
+                    bot.send_message(uid, briefing, parse_mode='Markdown')
+                except Exception as e:
+                    print(f"Error sending briefing to {uid}: {e}")
+                    game_state.send_to_creator(
+                        f"⚠️ Couldn't DM {game_state.get_player_name(uid)}. Make sure you started a PM with this bot!",
+                        parse_mode='Markdown')
+            except Exception as e:
+                print(f"Error processing briefing for {uid}: {e}")
+                continue
+
+        for uid, data in game_state.bots.items():
+            role = data.get('role')
+            if role in ['Blackout', 'Razor', 'Phantom', 'Thug']:
+                game_state.bots[uid]['teammates'] = [uid2 for uid2, d2 in game_state.get_alive_corrupt() if uid2 != uid]
+
+    except Exception as e:
+        print(f"Error in send_role_briefings: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def send_lobby_buttons(game_state):
@@ -280,38 +296,54 @@ def solo_command(message):
 
 
 def start_solo_game(chat_id, user_id):
-    game_state = GameState(chat_id, user_id, 1, solo_mode=True)
-    game_states[chat_id] = game_state
+    try:
+        game_state = GameState(chat_id, user_id, 1, solo_mode=True)
+        game_states[chat_id] = game_state
 
-    game_state.players[user_id] = {
-        'name': 'You',
-        'role': None,
-        'is_alive': True,
-        'elo': get_player(user_id)['elo'] if get_player(user_id) else GAME_SETTINGS['INITIAL_ELO']
-    }
-    save_player(user_id, 'You')
-
-    for i in range(9):
-        bot_id = f"solo_bot_{i+1}_{chat_id}"
-        bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"Bot_{i+1}"
-        personality = random.choice(BOT_PERSONALITIES)
-
-        game_state.bots[bot_id] = {
-            'name': bot_name,
+        game_state.players[str(user_id)] = {
+            'name': 'You',
             'role': None,
             'is_alive': True,
-            'personality': personality,
-            'is_ai': True
+            'elo': get_player(user_id)['elo'] if get_player(user_id) else GAME_SETTINGS['INITIAL_ELO']
         }
-        save_player(bot_id, bot_name, True)
+        save_player(user_id, 'You')
 
-    game_state.send_msg(chat_id, "⚡ *BLACKOUT — SOLO MODE*\n\n9 AI opponents added. Starting in 3 seconds...", parse_mode='Markdown')
+        available_names = list(BOT_NAMES)
+        random.shuffle(available_names)
 
-    def start_delayed():
-        time.sleep(3)
-        start_game(game_state)
+        for i in range(9):
+            bot_id = f"solo_bot_{i+1}_{chat_id}"
+            bot_name = available_names[i] if i < len(available_names) else f"Bot_{i+1}"
+            personality = random.choice(BOT_PERSONALITIES)
 
-    Thread(target=start_delayed, daemon=True).start()
+            game_state.bots[bot_id] = {
+                'name': bot_name,
+                'role': None,
+                'is_alive': True,
+                'personality': personality,
+                'is_ai': True
+            }
+            save_player(bot_id, bot_name, True)
+
+        markup = InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            InlineKeyboardButton("1 Killer", callback_data="solo_corrupt_1"),
+            InlineKeyboardButton("2 Killers", callback_data="solo_corrupt_2")
+        )
+
+        count = len(game_state.players) + len(game_state.bots)
+        game_state.send_msg(chat_id,
+            f"⚡ *BLACKOUT — SOLO MODE*\n\n"
+            f"9 AI opponents added. ({count} players total)\n\n"
+            f"How many killers should there be?",
+            reply_markup=markup, parse_mode='Markdown')
+
+    except Exception as e:
+        print(f"Error in start_solo_game: {e}")
+        try:
+            bot.send_message(chat_id, f"❌ Error starting solo game: {str(e)}")
+        except Exception:
+            pass
 
 
 @bot.message_handler(commands=['join'])
@@ -548,6 +580,10 @@ def handle_callback(call):
     try:
         if data.startswith('lobby_'):
             handle_lobby_callback(call)
+            return
+
+        if data.startswith('solo_corrupt_'):
+            handle_solo_corrupt_choice(call)
             return
 
         if chat_id not in game_states:
@@ -804,10 +840,14 @@ def handle_lobby_callback(call):
 
         elif data == 'lobby_help':
             try:
-                bot.send_message(user_id, HELP_MESSAGE, parse_mode='Markdown')
-                bot.answer_callback_query(call.id, "Help sent to your DMs!")
-            except Exception:
-                bot.answer_callback_query(call.id, "Start a PM with me first!")
+                bot.send_message(chat_id, HELP_MESSAGE, parse_mode='Markdown')
+                bot.answer_callback_query(call.id, "How to play!")
+            except Exception as e:
+                print(f"Error sending help: {e}")
+                try:
+                    bot.answer_callback_query(call.id, "Error sending help.")
+                except Exception:
+                    pass
 
         elif data == 'lobby_stats':
             player = get_player(user_id)
@@ -850,20 +890,61 @@ def handle_lobby_callback(call):
             pass
 
 
+def handle_solo_corrupt_choice(call):
+    chat_id = call.message.chat.id
+    user_id = call.from_user.id
+    data = call.data
+
+    try:
+        if chat_id not in game_states:
+            bot.answer_callback_query(call.id, "No game found.")
+            return
+
+        game_state = game_states[chat_id]
+        corrupt_count = int(data.split('_')[-1])
+        game_state.corrupt_count = corrupt_count
+
+        bot.answer_callback_query(call.id, f"Starting with {corrupt_count} killer(s)!")
+        game_state.send_msg(chat_id, f"⚡ Starting with {corrupt_count} killer(s). Good luck!", parse_mode='Markdown')
+
+        def start_delayed():
+            time.sleep(2)
+            try:
+                start_game(game_state)
+            except Exception as e:
+                print(f"Error starting game: {e}")
+                game_state.send_msg(chat_id, f"❌ Error starting game: {str(e)}")
+
+        Thread(target=start_delayed, daemon=True).start()
+
+    except Exception as e:
+        print(f"Error in solo_corrupt callback: {e}")
+        try:
+            bot.answer_callback_query(call.id, "Error. Try again.")
+        except Exception:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # GAME FLOW
 # ---------------------------------------------------------------------------
 
 def start_game(game_state):
-    game_state.current_phase = 'STARTING'
-    game_state.game_start_time = datetime.now()
-    game_state.game_id = create_game(game_state.chat_id, game_state.corrupt_count)
+    try:
+        game_state.current_phase = 'STARTING'
+        game_state.game_start_time = datetime.now()
+        game_state.game_id = create_game(game_state.chat_id, game_state.corrupt_count)
 
-    assign_roles(game_state)
-    send_role_briefings(game_state)
+        assign_roles(game_state)
+        send_role_briefings(game_state)
 
-    game_state.send_to_creator(START_TALE, parse_mode='Markdown')
-    start_night_phase(game_state)
+        game_state.send_to_creator(START_TALE, parse_mode='Markdown')
+        start_night_phase(game_state)
+    except Exception as e:
+        print(f"Error in start_game: {e}")
+        import traceback
+        traceback.print_exc()
+        game_state.send_to_creator(f"❌ Game crashed: {str(e)}")
 
 
 def start_night_phase(game_state):
