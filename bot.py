@@ -1075,14 +1075,11 @@ def handle_lobby_callback(call):
 
         elif data == 'lobby_help':
             try:
-                bot.send_message(user_id, HELP_MESSAGE, parse_mode='Markdown')
-            except Exception:
-                try:
-                    bot.send_message(user_id, HELP_MESSAGE)
-                except Exception as e:
-                    print(f"Error sending help: {e}")
+                bot.send_message(chat_id, HELP_MESSAGE)
+            except Exception as e:
+                print(f"Error sending help: {e}")
             try:
-                bot.answer_callback_query(call.id, "Check your DMs!")
+                bot.answer_callback_query(call.id)
             except Exception:
                 pass
 

@@ -273,40 +273,40 @@ LOBBY_MESSAGES = {
     'corrupt_count_set': "⚙️ Corrupt count set to {count}."
 }
 
-HELP_MESSAGE = """🎮 *BLACKOUT - How to Play*
+HELP_MESSAGE = """BLACKOUT - How to Play
 
-*Objective:*
-• Survivors: Eliminate all Corrupt + Neutrals
-• Corrupt: Kill all Survivors
-• Neutrals: Complete individual win conditions
+Objective:
+Survivors: Eliminate all Corrupt + Neutrals
+Corrupt: Kill all Survivors
+Neutrals: Complete individual win conditions
 
-*Commands:*
-• /join - Join the lobby
-• /leave - Leave the lobby
-• /add_bots - Fill to 10 with smart bots
-• /help - Show this message
-• /players - Show current players
-• /skip - Skip vote
-• /spectate - View game as dead player
-• /stats - View your ELO and record
-• /leaderboard - View top players
+Commands:
+/join - Join the lobby
+/leave - Leave the lobby
+/add_bots - Fill to 10 with smart bots
+/help - Show this message
+/players - Show current players
+/skip - Skip vote
+/spectate - View game as dead player
+/stats - View your ELO and record
+/leaderboard - View top players
 
-*Day Phase:*
-• 60 seconds to discuss
-• 30 seconds to vote
-• Majority vote = exile
-• Tie or skip = no exile
+Day Phase:
+60 seconds to discuss
+30 seconds to vote
+Majority vote = exile
+Tie or skip = no exile
 
-*Scan Results:*
-• CLEAN: Likely innocent
-• SUSPICIOUS: Could be Corrupt, Neutral, or vanilla
-• Only Blackout appears CLEAN among Corrupt
+Scan Results:
+CLEAN = Likely innocent
+SUSPICIOUS = Could be Corrupt, Neutral, or vanilla
+Only Blackout appears CLEAN among Corrupt
 
-*Tips:*
-• Volt and Grid appear SUSPICIOUS when using abilities
-• Sheriff dies if they kill an innocent
-• Phantom marks players for Corrupt team
-• Dead players can spectate but not influence
+Tips:
+Volt and Grid appear SUSPICIOUS when using abilities
+Sheriff dies if they kill an innocent
+Phantom marks players for Corrupt team
+Dead players can spectate but not influence
 """
 
 DEAD_SPECTATE_MESSAGE = """
