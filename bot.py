@@ -522,6 +522,31 @@ def solo_command(message):
     start_solo_game(message.chat.id, message.from_user.id, message.from_user.first_name or 'You')
 
 
+@bot.message_handler(commands=['dev'])
+def dev_command(message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+
+    all_roles = []
+    for pool_name, roles in ROLE_POOLS.items():
+        for role in roles:
+            all_roles.append(role)
+    all_roles = list(dict.fromkeys(all_roles))
+
+    markup = InlineKeyboardMarkup(row_width=2)
+    buttons = []
+    for role in all_roles:
+        buttons.append(InlineKeyboardButton(role, callback_data=f"dev_role_{role}"))
+    for i in range(0, len(buttons), 2):
+        row = buttons[i:i+2]
+        markup.add(*row)
+
+    try:
+        bot.send_message(chat_id, "🔧 *DEV MODE* — Pick your role:", reply_markup=markup, parse_mode='Markdown')
+    except Exception:
+        bot.send_message(chat_id, "DEV MODE - Pick your role:", reply_markup=markup)
+
+
 def start_solo_game(chat_id, user_id, user_name='You'):
     try:
         game_state = GameState(chat_id, user_id, 1, solo_mode=True)
@@ -813,6 +838,10 @@ def handle_callback(call):
             handle_solo_corrupt_choice(call)
             return
 
+        if data.startswith('dev_role_'):
+            handle_dev_role_choice(call)
+            return
+
         if chat_id not in game_states:
             bot.answer_callback_query(call.id, "No active game.")
             return
@@ -823,12 +852,12 @@ def handle_callback(call):
             bot.answer_callback_query(call.id, "Slow down! Anti-spam active.")
             return
 
-        if data.startswith('kill_'):
+        elif data.startswith('kill_'):
             target_uid = extract_uid(data, 1)
             game_state.night_actions[f"kill_{user_id}"] = target_uid
             bot.answer_callback_query(call.id, f"Target: {game_state.get_player_name(target_uid)}")
             try:
-                bot.edit_message_text("✅ Target logged. Awaiting dawn...", chat_id, call.message.message_id)
+                bot.edit_message_text("Target logged. Awaiting dawn...", chat_id, call.message.message_id)
             except Exception:
                 pass
 
@@ -842,7 +871,7 @@ def handle_callback(call):
                 game_state.wraith_uses[user_id] = game_state.wraith_uses.get(user_id, 0) + 1
             bot.answer_callback_query(call.id, f"Target: {game_state.get_player_name(target_uid)}")
             try:
-                bot.edit_message_text("✅ Target logged. Awaiting dawn...", chat_id, call.message.message_id)
+                bot.edit_message_text("Target logged. Awaiting dawn...", chat_id, call.message.message_id)
             except Exception:
                 pass
 
@@ -851,7 +880,7 @@ def handle_callback(call):
             game_state.night_actions[f"mark_{user_id}"] = target_uid
             bot.answer_callback_query(call.id, f"Marked: {game_state.get_player_name(target_uid)}")
             try:
-                bot.edit_message_text("✅ Target marked for Corrupt team.", chat_id, call.message.message_id)
+                bot.edit_message_text("Target marked for Corrupt team.", chat_id, call.message.message_id)
             except Exception:
                 pass
 
@@ -863,7 +892,7 @@ def handle_callback(call):
             game_state.protection_history[user_id].append(target_uid)
             bot.answer_callback_query(call.id, f"Protecting: {game_state.get_player_name(target_uid)}")
             try:
-                bot.edit_message_text("✅ Protection active. Awaiting dawn...", chat_id, call.message.message_id)
+                bot.edit_message_text("Protection active. Awaiting dawn...", chat_id, call.message.message_id)
             except Exception:
                 pass
 
@@ -875,13 +904,16 @@ def handle_callback(call):
             game_state.scan_history[user_id].append(target_uid)
             target_role = game_state.players.get(target_uid, {}).get('role') or game_state.bots.get(target_uid, {}).get('role')
             scan_result = ROLE_DEFINITIONS.get(target_role, {}).get('scan_result', 'CLEAN')
+            if str(user_id) not in game_state.scan_results:
+                game_state.scan_results[str(user_id)] = {}
+            game_state.scan_results[str(user_id)][str(target_uid)] = scan_result
             try:
-                bot.send_message(user_id, f"🔍 Scan result: {game_state.get_player_name(target_uid)} is {scan_result}")
+                bot.send_message(user_id, f"Scan result: {game_state.get_player_name(target_uid)} is {scan_result}")
             except Exception:
                 pass
             bot.answer_callback_query(call.id, "Scan complete.")
             try:
-                bot.edit_message_text(f"✅ {game_state.get_player_name(target_uid)} is {scan_result}", chat_id, call.message.message_id)
+                bot.edit_message_text(f"Scanning done. {game_state.get_player_name(target_uid)} is {scan_result}", chat_id, call.message.message_id)
             except Exception:
                 pass
 
@@ -893,7 +925,7 @@ def handle_callback(call):
             game_state.block_history[user_id].append(target_uid)
             bot.answer_callback_query(call.id, f"Blocked: {game_state.get_player_name(target_uid)}")
             try:
-                bot.edit_message_text("✅ Block active. Awaiting dawn...", chat_id, call.message.message_id)
+                bot.edit_message_text("Block active. Awaiting dawn...", chat_id, call.message.message_id)
             except Exception:
                 pass
 
@@ -902,12 +934,12 @@ def handle_callback(call):
             game_state.used_abilities[f"kernel_{user_id}"] = True
             target_role = game_state.players.get(target_uid, {}).get('role') or game_state.bots.get(target_uid, {}).get('role')
             try:
-                bot.send_message(user_id, f"🔍 {game_state.get_player_name(target_uid)} is {target_role}")
+                bot.send_message(user_id, f"{game_state.get_player_name(target_uid)} is {target_role}")
             except Exception:
                 pass
             bot.answer_callback_query(call.id, "Role revealed.")
             try:
-                bot.edit_message_text(f"✅ {game_state.get_player_name(target_uid)} is {target_role}", chat_id, call.message.message_id)
+                bot.edit_message_text(f"{game_state.get_player_name(target_uid)} is {target_role}", chat_id, call.message.message_id)
             except Exception:
                 pass
 
@@ -929,7 +961,7 @@ def handle_callback(call):
                 pass
             bot.answer_callback_query(call.id, "Player revived.")
             try:
-                bot.edit_message_text(f"✅ {game_state.get_player_name(target_uid)} has been revived!", chat_id, call.message.message_id)
+                bot.edit_message_text(f"{game_state.get_player_name(target_uid)} has been revived!", chat_id, call.message.message_id)
             except Exception:
                 pass
 
@@ -938,7 +970,7 @@ def handle_callback(call):
             game_state.night_actions[f"sheriff_{user_id}"] = target_uid
             bot.answer_callback_query(call.id, f"Target: {game_state.get_player_name(target_uid)}")
             try:
-                bot.edit_message_text("✅ Execution ordered. Awaiting dawn...", chat_id, call.message.message_id)
+                bot.edit_message_text("Execution ordered. Awaiting dawn...", chat_id, call.message.message_id)
             except Exception:
                 pass
 
@@ -947,7 +979,7 @@ def handle_callback(call):
             game_state.night_actions[f"infect_{user_id}"] = target_uid
             bot.answer_callback_query(call.id, f"Infected: {game_state.get_player_name(target_uid)}")
             try:
-                bot.edit_message_text("✅ Infection spread. Awaiting dawn...", chat_id, call.message.message_id)
+                bot.edit_message_text("Infection spread. Awaiting dawn...", chat_id, call.message.message_id)
             except Exception:
                 pass
 
@@ -963,7 +995,7 @@ def handle_callback(call):
                 pass
             bot.answer_callback_query(call.id, f"Stole {target_role} ability.")
             try:
-                bot.edit_message_text(f"✅ You now have the {target_role} ability.", chat_id, call.message.message_id)
+                bot.edit_message_text(f"You now have the {target_role} ability.", chat_id, call.message.message_id)
             except Exception:
                 pass
 
@@ -971,7 +1003,7 @@ def handle_callback(call):
             game_state.night_actions[f"skip_{user_id}"] = True
             bot.answer_callback_query(call.id, "Ability skipped.")
             try:
-                bot.edit_message_text("✅ Ability skipped.", chat_id, call.message.message_id)
+                bot.edit_message_text("Ability skipped.", chat_id, call.message.message_id)
             except Exception:
                 pass
 
@@ -1153,6 +1185,118 @@ def handle_solo_corrupt_choice(call):
 
     except Exception as e:
         print(f"Error in solo_corrupt callback: {e}")
+        try:
+            bot.answer_callback_query(call.id, "Error. Try again.")
+        except Exception:
+            pass
+
+
+def handle_dev_role_choice(call):
+    chat_id = call.message.chat.id
+    user_id = call.from_user.id
+    data = call.data
+
+    try:
+        chosen_role = data.replace('dev_role_', '', 1)
+
+        game_state = GameState(chat_id, user_id, 1, solo_mode=True)
+        game_states[chat_id] = game_state
+
+        game_state.players[user_id] = {
+            'name': call.from_user.first_name or 'Dev',
+            'role': chosen_role,
+            'is_alive': True,
+            'elo': get_player(user_id)['elo'] if get_player(user_id) else GAME_SETTINGS['INITIAL_ELO']
+        }
+        save_player(user_id, call.from_user.first_name or 'Dev')
+
+        available_names = list(BOT_NAMES)
+        random.shuffle(available_names)
+
+        for i in range(9):
+            bot_id = f"solo_bot_{i+1}_{chat_id}"
+            bot_name = available_names[i] if i < len(available_names) else f"Bot_{i+1}"
+            personality = random.choice(BOT_PERSONALITIES)
+
+            game_state.bots[bot_id] = {
+                'name': bot_name,
+                'role': None,
+                'is_alive': True,
+                'personality': personality,
+                'is_ai': True
+            }
+            save_player(bot_id, bot_name, True)
+
+        bot.answer_callback_query(call.id, f"Starting as {chosen_role}!")
+        game_state.send_msg(chat_id, f"🔧 DEV MODE: You are {chosen_role}. Starting game...", parse_mode='Markdown')
+
+        def start_delayed():
+            time.sleep(2)
+            try:
+                game_state.game_id = create_game(game_state.chat_id, game_state.corrupt_count)
+                game_state.current_phase = 'STARTING'
+                game_state.game_start_time = datetime.now()
+
+                all_uids = list(game_state.players.keys()) + list(game_state.bots.keys())
+                random.shuffle(all_uids)
+
+                corrupt_roles = []
+                if game_state.corrupt_count == 1:
+                    corrupt_roles = [random.choice(['Blackout', 'Razor', 'Thug'])]
+                else:
+                    primary = random.choice(['Blackout', 'Razor'])
+                    secondary = random.choice(['Thug', 'Thug'])
+                    corrupt_roles = [primary, secondary]
+
+                neutral_count = random.choice([0, 1, 2])
+                neutral_roles = random.sample(ROLE_POOLS['NEUTRAL'], min(neutral_count, len(ROLE_POOLS['NEUTRAL'])))
+
+                survivor_count = 6
+                vanilla_count = 2
+                ability_count = survivor_count - vanilla_count
+
+                vanilla_roles = random.choices(ROLE_POOLS['SURVIVOR_VANILLA'], k=vanilla_count)
+                ability_roles = random.sample(ROLE_POOLS['SURVIVOR_ABILITY'], min(ability_count, len(ROLE_POOLS['SURVIVOR_ABILITY'])))
+
+                all_roles = corrupt_roles + neutral_roles + ability_roles + vanilla_roles
+                while len(all_roles) < len(all_uids):
+                    all_roles.append(random.choice(ROLE_POOLS['SURVIVOR_VANILLA']))
+
+                random.shuffle(all_roles)
+
+                human_uid = list(game_state.players.keys())[0]
+                human_role = game_state.players[human_uid]['role']
+
+                role_idx = 0
+                for idx, uid in enumerate(all_uids):
+                    if uid == human_uid:
+                        add_game_player(game_state.game_id, uid, human_role)
+                        continue
+                    role = all_roles[role_idx] if role_idx < len(all_roles) else random.choice(ROLE_POOLS['SURVIVOR_VANILLA'])
+                    role_idx += 1
+                    if uid in game_state.players:
+                        game_state.players[uid]['role'] = role
+                    elif uid in game_state.bots:
+                        game_state.bots[uid]['role'] = role
+                    save_player(uid, game_state.get_player_name(uid), game_state.is_ai(uid))
+                    add_game_player(game_state.game_id, uid, role)
+
+                send_role_briefings(game_state)
+
+                game_state.send_to_creator(START_TALE, parse_mode='Markdown')
+                game_state.send_to_creator("⏳ 15 seconds to study your role...", parse_mode='Markdown')
+                time.sleep(15)
+                start_night_phase(game_state)
+            except Exception as e:
+                print(f"Error starting dev game: {e}")
+                import traceback
+                traceback.print_exc()
+                game_state.send_msg(chat_id, f"❌ Error: {str(e)}")
+
+        Thread(target=start_delayed, daemon=True).start()
+
+    except Exception as e:
+        print(f"Error in dev_role callback: {e}")
         try:
             bot.answer_callback_query(call.id, "Error. Try again.")
         except Exception:
