@@ -1,4 +1,5 @@
 import os
+import json
 import time
 import random
 import telebot
@@ -19,7 +20,7 @@ from game_messages import (
     VOTE_PUBLIC_MESSAGE, VOTE_SKIP_PUBLIC_MESSAGE, STATIC_PASSIVE_MESSAGE,
     RELAY_PASSIVE_MESSAGE, PING_PASSIVE_MESSAGE, BOT_CHAT_TEMPLATES,
     ELO_MESSAGES, STATS_MESSAGE, LEADERBOARD_MESSAGE, LEADERBOARD_ENTRY,
-    GAME_REPLAY_HEADER, GAME_REPLAY_ENTRY
+    GAME_REPLAY_HEADER, GAME_REPLAY_ENTRY, ABILITY_ANNOUNCEMENTS
 )
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN, parse_mode='Markdown')
@@ -60,6 +61,11 @@ class GameState:
         self.last_human_message = ''
         self.bot_brain = {}
         self.last_night_deaths = []
+        self.dead_this_round = []
+        self.vote_history = []
+        self.scan_results = {}
+        self.exiled_players = []
+        self.announced_abilities = []
 
     def can_message(self, user_id):
         now = datetime.now()
@@ -162,15 +168,22 @@ def extract_uid(data, prefix_parts=1):
 
 def init_bot_brain(game_state):
     for uid, data in game_state.bots.items():
-        game_state.bot_brain[uid] = {
-            'suspicion': {},
-            'known_roles': {},
-            'last_vote': None,
-            'mentioned_by_player': False,
-            'statements': [],
-            'vote_blocs': {},
-            'contradictions': {},
-        }
+        if uid in game_state.bot_brain:
+            brain = game_state.bot_brain[uid]
+            brain['statements'] = [s for s in brain.get('statements', []) if s.get('round', 0) >= game_state.current_round - 2]
+            brain['last_vote'] = None
+        else:
+            game_state.bot_brain[uid] = {
+                'suspicion': {},
+                'known_roles': {},
+                'last_vote': None,
+                'mentioned_by_player': False,
+                'statements': [],
+                'vote_blocs': {},
+                'contradictions': {},
+                'scan_results': {},
+                'targeted_by': [],
+            }
 
 
 def find_mentioned_player(text, game_state):
@@ -199,6 +212,8 @@ def update_bot_suspicions(game_state, speaker_uid, text):
     if target_uid is None:
         return
 
+    speaker_name = game_state.get_player_name(speaker_uid)
+
     for bot_uid, brain in game_state.bot_brain.items():
         if bot_uid == speaker_uid:
             continue
@@ -208,11 +223,12 @@ def update_bot_suspicions(game_state, speaker_uid, text):
         is_corrupt = bot_data.get('role') in corrupt_team()
         delta = 0
         if intent == 'accuse':
-            delta = 2 if is_corrupt else 1
+            delta = SUSPICION_WEIGHTS['ACCUSED_BY'] * (1.5 if is_corrupt else 1)
         elif intent == 'defend':
-            delta = -1 if is_corrupt else -2
+            delta = SUSPICION_WEIGHTS['DEFENDED_BY'] * (1.5 if is_corrupt else 1)
         else:
-            delta = 1 if is_corrupt else 0
+            delta = 0.5 if is_corrupt else 0
+
         brain['suspicion'][target_uid] = brain['suspicion'].get(target_uid, 0) + delta
 
         brain['statements'].append({
@@ -227,7 +243,12 @@ def update_bot_suspicions(game_state, speaker_uid, text):
             if p['intent'] != intent:
                 key = (speaker_uid, target_uid)
                 brain['contradictions'][key] = brain['contradictions'].get(key, 0) + 1
-                brain['suspicion'][speaker_uid] = brain['suspicion'].get(speaker_uid, 0) + 3
+                brain['suspicion'][speaker_uid] = brain['suspicion'].get(speaker_uid, 0) + SUSPICION_WEIGHTS['CONTRADICTION']
+
+        try:
+            update_ai_memory(str(bot_uid), target_uid, delta)
+        except Exception:
+            pass
 
 
 def get_best_bot_responder(game_state, text):
@@ -270,11 +291,84 @@ def format_bot_response(game_state, uid, data, target_uid, action, text):
     accuser_name = random.choice([d2['name'] for uid2, d2 in others if uid2 != target_uid]) if others and target_uid else 'Someone'
     truncated = (text[:80] + '...') if len(text) > 80 else text
 
-    template = templates.get(action, templates['quiet'])
+    brain = game_state.bot_brain.get(uid, {})
+    my_scans = game_state.scan_results.get(str(uid), {}) if hasattr(game_state, 'scan_results') else {}
+    exiled = getattr(game_state, 'exiled_players', [])
+    dead_this_round = getattr(game_state, 'last_night_deaths', [])
+
+    game_ref = ""
+    if dead_this_round:
+        dead_name = game_state.get_player_name(dead_this_round[0])
+        game_ref = random.choice([
+            f"After {dead_name} died last round, ",
+            f"With {dead_name} gone, ",
+            f" {dead_name}'s death tells me ",
+        ])
+    elif exiled:
+        ex_name, ex_data = exiled[-1]
+        game_ref = random.choice([
+            f"Since {ex_name} was exiled as {ex_data.get('role', '?')}, ",
+            f" {ex_name} being {ex_data.get('role', '?')} changes things. ",
+            f" We learned {ex_name} was {ex_data.get('role', '?')}. ",
+        ])
+
+    scan_ref = ""
+    if my_scans and target_uid:
+        scan_result = my_scans.get(str(target_uid))
+        if scan_result == 'CLEAN':
+            scan_ref = random.choice([
+                f" I scanned {target_name} and they're clean. ",
+                f" My scan on {target_name} came back clean. ",
+                f" {target_name} checks out clean from my scan. ",
+            ])
+        elif scan_result == 'SUSPICIOUS':
+            scan_ref = random.choice([
+                f" My scan lit up on {target_name}. ",
+                f" I scanned {target_name} and got SUS. ",
+                f" {target_name} came back suspicious on my scan. ",
+            ])
+
+    vote_ref = ""
+    if hasattr(game_state, 'vote_history') and game_state.vote_history and target_uid:
+        recent_voters = [v for v in game_state.vote_history[-5:] if v.get('target') == target_uid]
+        if recent_voters:
+            voter_names = [game_state.get_player_name(v['voter']) for v in recent_voters[:2]]
+            vote_ref = random.choice([
+                f" {', '.join(voter_names)} voted for {target_name} before. ",
+                f" {voter_names[0]} targeted {target_name} in voting. ",
+            ])
+
+    ref_prefix = game_ref + scan_ref + vote_ref
+
+    pool = templates.get(action, templates.get('quiet', []))
+    if isinstance(pool, list):
+        template = random.choice(pool) if pool else random.choice(templates.get('quiet', ["🤖 {bot} says: ..."]))
+    else:
+        template = pool
+
+    pct = random.randint(60, 95)
+    score = round(random.uniform(5.5, 9.5), 1)
+    buddy_data = None
+    if action == 'vote_bloc' and others:
+        for uid2, d2 in others:
+            if uid2 != target_uid:
+                buddy_data = d2
+                break
+    buddy_name = buddy_data['name'] if buddy_data else 'someone'
+
     try:
-        return template.format(bot=data['name'], target=target_name, accuser=accuser_name, message=truncated)
+        response = template.format(
+            bot=data['name'], target=target_name, accuser=accuser_name,
+            message=truncated, pct=pct, score=score, buddy=buddy_name,
+            player=accuser_name
+        )
     except KeyError:
-        return templates['quiet'].format(bot=data['name'], target=target_name, accuser=accuser_name, message=truncated)
+        response = template.format(bot=data['name'], target=target_name, accuser=accuser_name, message=truncated)
+
+    if ref_prefix and random.random() < 0.5:
+        response = ref_prefix.strip() + " " + response
+
+    return response
 
 
 def assign_roles(game_state):
@@ -354,6 +448,7 @@ def send_role_briefings(game_state):
 
         for uid, data in game_state.bots.items():
             role = data.get('role')
+            data['bot_uid'] = uid
             if role in ['Blackout', 'Razor', 'Phantom', 'Thug']:
                 game_state.bots[uid]['teammates'] = [uid2 for uid2, d2 in game_state.get_alive_corrupt() if uid2 != uid]
 
@@ -1179,11 +1274,14 @@ def send_neutral_kill_prompt(game_state, uid):
 
 
 def send_glitch_prompt(game_state, uid):
-    dead_with_abilities = [(uid2, d2) for uid2, d2 in game_state.players.items() if not d2.get('is_alive', True) and d2.get('role') in ROLE_POOLS['SURVIVOR_ABILITY']]
-    if not dead_with_abilities:
+    if game_state.used_abilities.get(f"glitch_{uid}", False):
+        return
+    all_dead = [(uid2, d2) for uid2, d2 in game_state.players.items() if not d2.get('is_alive', True) and d2.get('role')] + \
+               [(uid2, d2) for uid2, d2 in game_state.bots.items() if not d2.get('is_alive', True) and d2.get('role')]
+    if not all_dead:
         return
     markup = InlineKeyboardMarkup()
-    for uid2, data2 in dead_with_abilities:
+    for uid2, data2 in all_dead:
         markup.add(InlineKeyboardButton(f"Steal: {game_state.get_player_name(uid2)} ({data2['role']})", callback_data=f"steal_{uid2}"))
     markup.add(InlineKeyboardButton("Skip", callback_data="skip_ability"))
     try:
@@ -1303,6 +1401,9 @@ def resolve_bot_night_actions(game_state):
         if not alive_targets:
             continue
 
+        brain = game_state.bot_brain.get(uid, {})
+        suspicions = brain.get('suspicion', {})
+
         if role in ['Blackout', 'Razor', 'Thug']:
             non_corrupt = [(uid2, d2) for uid2, d2 in alive_targets if d2.get('role') not in corrupt_team()]
             targets = non_corrupt if non_corrupt else alive_targets
@@ -1312,7 +1413,9 @@ def resolve_bot_night_actions(game_state):
             if game_state.used_abilities.get(f"phantom_{uid}", 0) % 2 == 0:
                 ability_targets = [(uid2, d2) for uid2, d2 in alive_targets if d2.get('role') in ROLE_POOLS['SURVIVOR_ABILITY']]
                 if ability_targets:
-                    game_state.night_actions[f"mark_{uid}"] = random.choice(ability_targets)[0]
+                    scored = [(uid2, suspicions.get(uid2, 0) + random.uniform(0, 2)) for uid2, _ in ability_targets]
+                    scored.sort(key=lambda x: x[1], reverse=True)
+                    game_state.night_actions[f"mark_{uid}"] = scored[0][0]
         elif role in ['Virus', 'Wraith']:
             uses = game_state.virus_uses.get(uid, 0) if role == 'Virus' else game_state.wraith_uses.get(uid, 0)
             if uses < 2:
@@ -1325,7 +1428,9 @@ def resolve_bot_night_actions(game_state):
                     game_state.wraith_uses[uid] = game_state.wraith_uses.get(uid, 0) + 1
         elif role == 'Plague':
             if game_state.plague_infections.get(uid, 0) < 3:
-                game_state.night_actions[f"infect_{uid}"] = random.choice(alive_targets)[0]
+                unsuspicious = [(uid2, d2) for uid2, d2 in alive_targets if suspicions.get(uid2, 0) < 1]
+                targets = unsuspicious if unsuspicious else alive_targets
+                game_state.night_actions[f"infect_{uid}"] = random.choice(targets)[0]
                 game_state.plague_infections[uid] = game_state.plague_infections.get(uid, 0) + 1
         elif role == 'Volt':
             last_protected = game_state.protection_history.get(uid, [])
@@ -1333,41 +1438,79 @@ def resolve_bot_night_actions(game_state):
             if not valid:
                 valid = alive_targets
             clean_targets = [(uid2, d2) for uid2, d2 in valid if is_scan_clean(d2.get('role'))]
-            target = random.choice(clean_targets if clean_targets else valid)[0]
+            high_sus = [(uid2, d2) for uid2, d2 in valid if suspicions.get(uid2, 0) > 2]
+            protect_pool = high_sus if high_sus else (clean_targets if clean_targets else valid)
+            target = random.choice(protect_pool)[0]
             game_state.night_actions[f"protect_{uid}"] = target
             if uid not in game_state.protection_history:
                 game_state.protection_history[uid] = []
             game_state.protection_history[uid].append(target)
+            ann_templates = ABILITY_ANNOUNCEMENTS.get('Volt', {}).get('protected', [])
+            if ann_templates:
+                game_state.announced_abilities.append(random.choice(ann_templates).format(bot=data['name']))
         elif role == 'Grid':
             last_scanned = game_state.scan_history.get(uid, [])
             unscanned = [(uid2, d2) for uid2, d2 in alive_targets if uid2 not in last_scanned]
             suspicious = [(uid2, d2) for uid2, d2 in (unscanned if unscanned else alive_targets) if not is_scan_clean(d2.get('role'))]
-            target = random.choice(suspicious if suspicious else (unscanned if unscanned else alive_targets))[0]
+            high_sus = [(uid2, d2) for uid2, d2 in (unscanned if unscanned else alive_targets) if suspicions.get(uid2, 0) > 2]
+            scan_pool = high_sus if high_sus else (suspicious if suspicious else (unscanned if unscanned else alive_targets))
+            target = random.choice(scan_pool)[0]
             game_state.night_actions[f"scan_{uid}"] = target
             if uid not in game_state.scan_history:
                 game_state.scan_history[uid] = []
             game_state.scan_history[uid].append(target)
+            target_role = game_state.players.get(target, {}).get('role') or game_state.bots.get(target, {}).get('role')
+            scan_result = ROLE_DEFINITIONS.get(target_role, {}).get('scan_result', 'CLEAN')
+            if str(uid) not in game_state.scan_results:
+                game_state.scan_results[str(uid)] = {}
+            game_state.scan_results[str(uid)][str(target)] = scan_result
+            brain['scan_results'][str(target)] = scan_result
+            if scan_result == 'CLEAN':
+                brain['suspicion'][target] = brain['suspicion'].get(target, 0) + SUSPICION_WEIGHTS['SCAN_CLEAN']
+            else:
+                brain['suspicion'][target] = brain['suspicion'].get(target, 0) + SUSPICION_WEIGHTS['SCAN_SUSPICIOUS']
+            ann_key = 'scan_clean' if scan_result == 'CLEAN' else 'scan_suspicious'
+            ann_templates = ABILITY_ANNOUNCEMENTS.get('Grid', {}).get(ann_key, [])
+            if ann_templates:
+                game_state.announced_abilities.append(random.choice(ann_templates).format(bot=data['name'], target=game_state.get_player_name(target)))
         elif role == 'Bunker':
             last_blocked = game_state.block_history.get(uid, [])
             valid = [(uid2, d2) for uid2, d2 in alive_targets if uid2 not in last_blocked[-2:]]
             if not valid:
                 valid = alive_targets
             suspicious = [(uid2, d2) for uid2, d2 in valid if not is_scan_clean(d2.get('role'))]
-            target = random.choice(suspicious if suspicious else valid)[0]
+            high_sus = [(uid2, d2) for uid2, d2 in valid if suspicions.get(uid2, 0) > 2]
+            block_pool = high_sus if high_sus else (suspicious if suspicious else valid)
+            target = random.choice(block_pool)[0]
             game_state.night_actions[f"block_{uid}"] = target
             if uid not in game_state.block_history:
                 game_state.block_history[uid] = []
             game_state.block_history[uid].append(target)
+            ann_templates = ABILITY_ANNOUNCEMENTS.get('Bunker', {}).get('blocked', [])
+            if ann_templates:
+                game_state.announced_abilities.append(random.choice(ann_templates).format(bot=data['name']))
         elif role == 'Sheriff':
             clean_targets = [(uid2, d2) for uid2, d2 in alive_targets if not is_scan_clean(d2.get('role'))]
-            targets = clean_targets if clean_targets else alive_targets
-            game_state.night_actions[f"sheriff_{uid}"] = choose_bot_kill_target(game_state, uid, targets)
+            high_sus = [(uid2, d2) for uid2, d2 in alive_targets if suspicions.get(uid2, 0) > 3]
+            sheriff_pool = high_sus if high_sus else (clean_targets if clean_targets else alive_targets)
+            game_state.night_actions[f"sheriff_{uid}"] = choose_bot_kill_target(game_state, uid, sheriff_pool)
         elif role == 'Kernel':
             if not game_state.used_abilities.get(f"kernel_{uid}", False) and alive_targets:
                 suspicious = [(uid2, d2) for uid2, d2 in alive_targets if not is_scan_clean(d2.get('role'))]
-                target = random.choice(suspicious if suspicious else alive_targets)[0]
+                high_sus = [(uid2, d2) for uid2, d2 in alive_targets if suspicions.get(uid2, 0) > 2]
+                kernel_pool = high_sus if high_sus else (suspicious if suspicious else alive_targets)
+                target = random.choice(kernel_pool)[0]
                 game_state.night_actions[f"reveal_{uid}"] = target
                 game_state.used_abilities[f"kernel_{uid}"] = True
+                target_role = game_state.players.get(target, {}).get('role') or game_state.bots.get(target, {}).get('role')
+                brain['known_roles'][str(target)] = target_role
+                if target_role in ['Blackout', 'Razor', 'Phantom', 'Thug']:
+                    brain['suspicion'][target] = brain['suspicion'].get(target, 0) + SUSPICION_WEIGHTS['ROLE_REVEALED_CORRUPT']
+                else:
+                    brain['suspicion'][target] = brain['suspicion'].get(target, 0) + SUSPICION_WEIGHTS['ROLE_REVEALED_CLEAN']
+                ann_templates = ABILITY_ANNOUNCEMENTS.get('Kernel', {}).get('revealed', [])
+                if ann_templates:
+                    game_state.announced_abilities.append(random.choice(ann_templates).format(bot=data['name']))
         elif role == 'Flare':
             if not game_state.used_abilities.get(f"flare_{uid}", False):
                 dead_players = [(uid2, d2) for uid2, d2 in game_state.players.items() if not d2.get('is_alive', True)] + \
@@ -1379,21 +1522,29 @@ def resolve_bot_night_actions(game_state):
                     game_state.used_abilities[f"flare_{uid}"] = True
         elif role == 'Glitch':
             if not game_state.used_abilities.get(f"glitch_{uid}", False):
-                dead_with_abilities = [(uid2, d2) for uid2, d2 in game_state.players.items() if not d2.get('is_alive', True) and d2.get('role') in ROLE_POOLS['SURVIVOR_ABILITY']] + \
-                    [(uid2, d2) for uid2, d2 in game_state.bots.items() if not d2.get('is_alive', True) and d2.get('role') in ROLE_POOLS['SURVIVOR_ABILITY']]
-                if dead_with_abilities:
-                    target = random.choice(dead_with_abilities)[0]
+                all_dead = [(uid2, d2) for uid2, d2 in game_state.players.items() if not d2.get('is_alive', True) and d2.get('role')] + \
+                    [(uid2, d2) for uid2, d2 in game_state.bots.items() if not d2.get('is_alive', True) and d2.get('role')]
+                if all_dead:
+                    target = random.choice(all_dead)[0]
                     game_state.night_actions[f"steal_{uid}"] = target
                     game_state.used_abilities[f"glitch_{uid}"] = True
 
 
 def choose_bot_kill_target(game_state, bot_uid, alive_targets):
+    brain = game_state.bot_brain.get(bot_uid, {})
+    suspicions = brain.get('suspicion', {})
     memories = get_ai_memories(str(bot_uid))
     scores = {}
     for uid, data in alive_targets:
-        score = memories.get(uid, 0)
+        score = suspicions.get(uid, 0) * 2
+        score += memories.get(str(uid), 0)
         if data.get('role') in ROLE_POOLS['SURVIVOR_ABILITY']:
             score += SUSPICION_WEIGHTS['ABILITY_USED']
+        scan_res = brain.get('scan_results', {}).get(str(uid))
+        if scan_res == 'SUSPICIOUS':
+            score += SUSPICION_WEIGHTS['SCAN_SUSPICIOUS']
+        elif scan_res == 'CLEAN':
+            score += SUSPICION_WEIGHTS['SCAN_CLEAN']
         scores[uid] = score
 
     if scores:
@@ -1540,7 +1691,7 @@ def start_dawn_phase(game_state):
             for bot_uid, brain in game_state.bot_brain.items():
                 for other_uid, _ in game_state.get_alive_players():
                     if other_uid != bot_uid and other_uid != uid:
-                        brain['suspicion'][other_uid] = brain['suspicion'].get(other_uid, 0) + 0.5
+                        brain['suspicion'][other_uid] = brain['suspicion'].get(other_uid, 0) + SUSPICION_WEIGHTS['ROUND_SURVIVED']
 
     if dead_this_round:
         dead_ids = [uid for uid, _ in dead_this_round]
@@ -1550,9 +1701,12 @@ def start_dawn_phase(game_state):
         for bot_uid, brain in game_state.bot_brain.items():
             for stmt in brain.get('statements', []):
                 if stmt['target'] in dead_ids and stmt['intent'] == 'accuse':
-                    brain['suspicion'][stmt['speaker']] = brain['suspicion'].get(stmt['speaker'], 0) + 3
+                    brain['suspicion'][stmt['speaker']] = brain['suspicion'].get(stmt['speaker'], 0) + SUSPICION_WEIGHTS['DIED_ACCUSED']
     else:
         game_state.send_to_creator(DAWN_MESSAGES['no_kill'], parse_mode='Markdown')
+
+    for bot_uid, brain in game_state.bot_brain.items():
+        brain.pop('statements', None)
 
     win_condition, winner_id = game_state.check_win_condition()
     if win_condition:
@@ -1574,11 +1728,19 @@ def start_day_phase(game_state):
         start = time.time()
         alive_bots = [(uid, d) for uid, d in game_state.bots.items() if d.get('is_alive', True)]
         random.shuffle(alive_bots)
+
+        for announcement in game_state.announced_abilities:
+            if game_state.current_phase != 'DAY':
+                break
+            game_state.send_to_creator(announcement, parse_mode='Markdown')
+            time.sleep(random.uniform(1.5, 3))
+        game_state.announced_abilities = []
+
         for uid, data in alive_bots:
             if game_state.current_phase != 'DAY':
                 break
             elapsed = time.time() - start
-            if elapsed >= 25:
+            if elapsed >= 22:
                 break
             brain = game_state.bot_brain.get(uid, {})
             suspicions = brain.get('suspicion', {})
@@ -1587,10 +1749,18 @@ def start_day_phase(game_state):
                 others = [uid2 for uid2, d2 in game_state.get_alive_players() if uid2 != uid]
                 target_uid = random.choice(others) if others else None
             action = 'quiet'
-            if suspicions.get(target_uid, 0) > 1:
-                action = 'accuse'
-            elif suspicions.get(target_uid, 0) < -1:
+            sus_score = suspicions.get(target_uid, 0) if target_uid else 0
+            if sus_score > 3:
+                action = 'suspicion_level'
+            elif sus_score > 1:
+                action = random.choice(['accuse', 'deduction'])
+            elif sus_score < -2:
                 action = 'defend'
+            elif sus_score < -1:
+                action = random.choice(['defend', 'agree'])
+            else:
+                action = random.choice(['quiet', 'question', 'deduction'])
+
             game_state.send_to_creator(
                 format_bot_response(game_state, uid, data, target_uid, action, ''),
                 parse_mode='Markdown'
@@ -1641,10 +1811,22 @@ def bot_votes(game_state):
             continue
         brain = game_state.bot_brain.get(uid, {})
         suspicions = brain.get('suspicion', {})
-        if suspicions:
-            top_target = max(alive, key=lambda uid2: suspicions.get(uid2, 0))
+        is_corrupt = data.get('role') in corrupt_team()
+
+        if is_corrupt:
+            non_corrupt_sus = {k: v for k, v in suspicions.items() if k not in [str(u) for u, _ in game_state.get_alive_corrupt()]}
+            if non_corrupt_sus:
+                top_target = max(non_corrupt_sus, key=non_corrupt_sus.get)
+            elif suspicions:
+                top_target = max(alive, key=lambda uid2: suspicions.get(uid2, 0))
+            else:
+                top_target = random.choice(alive)
         else:
-            top_target = random.choice(alive)
+            if suspicions:
+                top_target = max(alive, key=lambda uid2: suspicions.get(uid2, 0))
+            else:
+                top_target = random.choice(alive)
+
         game_state.votes[uid] = top_target
         brain['last_vote'] = top_target
 
@@ -1663,7 +1845,7 @@ def bot_votes(game_state):
                     for pid in game_state.get_alive_players():
                         vid = pid[0]
                         if vid != uid and vid != other_uid:
-                            brain['suspicion'][vid] = brain['suspicion'].get(vid, 0) + 1
+                            brain['suspicion'][vid] = brain['suspicion'].get(vid, 0) + SUSPICION_WEIGHTS['VOTE_BLOC']
 
 
 def check_voting_complete(game_state):
@@ -1688,6 +1870,11 @@ def resolve_votes(game_state):
         return
     vote_counts = {}
     for voter_uid, target_uid in game_state.votes.items():
+        game_state.vote_history.append({
+            'voter': voter_uid,
+            'target': target_uid,
+            'round': game_state.current_round,
+        })
         if target_uid == 'skip':
             continue
         vote_counts[target_uid] = vote_counts.get(target_uid, 0) + 1
@@ -1709,6 +1896,8 @@ def resolve_votes(game_state):
     exiled_name = game_state.get_player_name(exiled_uid)
     exiled_role = game_state.players.get(exiled_uid, {}).get('role') or game_state.bots.get(exiled_uid, {}).get('role')
 
+    game_state.exiled_players.append((exiled_uid, {'role': exiled_role, 'name': exiled_name}))
+
     if exiled_uid in game_state.players:
         game_state.players[exiled_uid]['is_alive'] = False
     elif exiled_uid in game_state.bots:
@@ -1718,6 +1907,18 @@ def resolve_votes(game_state):
 
     game_state.send_to_creator(DAWN_MESSAGES['exile'].format(username=exiled_name, role=exiled_role), parse_mode='Markdown')
     log_game_event(game_state.game_id, game_state.current_round, 'EXILE', {'player': exiled_uid, 'role': exiled_role})
+
+    for bot_uid, brain in game_state.bot_brain.items():
+        if bot_uid in game_state.bots:
+            bot_role = game_state.bots[bot_uid].get('role')
+            if exiled_role in ['Blackout', 'Razor', 'Phantom', 'Thug']:
+                for voter_uid in game_state.votes:
+                    if game_state.votes[voter_uid] == exiled_uid and voter_uid != bot_uid:
+                        brain['suspicion'][voter_uid] = brain['suspicion'].get(voter_uid, 0) + SUSPICION_WEIGHTS['SCAN_CLEAN']
+            elif exiled_role in ROLE_POOLS['SURVIVOR_ABILITY'] + ROLE_POOLS['SURVIVOR_VANILLA']:
+                for voter_uid in game_state.votes:
+                    if game_state.votes[voter_uid] == exiled_uid and voter_uid != bot_uid:
+                        brain['suspicion'][voter_uid] = brain['suspicion'].get(voter_uid, 0) + SUSPICION_WEIGHTS['VOTE_AGAINST_INNOCENT']
 
     win_condition, winner_id = game_state.check_win_condition()
     if win_condition:
@@ -1791,7 +1992,7 @@ def send_game_replay(game_state):
     for round_num, events in sorted(rounds.items()):
         event_texts = []
         for event in events:
-            details = eval(event['details']) if isinstance(event['details'], str) else event['details']
+            details = json.loads(event['details']) if isinstance(event['details'], str) else event['details']
             if event['event_type'] == 'KILL':
                 killer_name = game_state.get_player_name(details.get('killer', 0))
                 target_name = game_state.get_player_name(details.get('target', 0))
@@ -1841,7 +2042,23 @@ def handle_message(message):
             alive_bots = [(uid, d) for uid, d in game_state.bots.items() if d.get('is_alive', True)]
             if not alive_bots:
                 return
-            bot_uid, bot_data = random.choice(alive_bots)
+
+            brain_scores = []
+            for buid, bdata in alive_bots:
+                brain = game_state.bot_brain.get(buid, {})
+                sus = brain.get('suspicion', {})
+                mentioned = find_mentioned_player(text, game_state)
+                score = random.uniform(0, 1)
+                if mentioned and sus.get(mentioned, 0) > 2:
+                    score += 3
+                elif mentioned and sus.get(mentioned, 0) < -1:
+                    score += 1
+                b_corrupt = bdata.get('role') in corrupt_team()
+                if get_message_intent(text) == 'accuse' and b_corrupt:
+                    score += 1
+                brain_scores.append((score, buid, bdata))
+            brain_scores.sort(reverse=True)
+            _, bot_uid, bot_data = brain_scores[0]
 
             ai_text = ai_chat.get_bot_response(bot_data, game_state, text)
             if ai_text:
@@ -1856,7 +2073,19 @@ def handle_message(message):
                     brain = game_state.bot_brain.get(bot_uid, {})
                     suspicions = brain.get('suspicion', {})
                     target_uid = max(suspicions, key=suspicions.get) if suspicions else random.choice(alive_others)
-            action = 'react' if target_uid else 'quiet'
+
+            sus_score = game_state.bot_brain.get(bot_uid, {}).get('suspicion', {}).get(target_uid, 0) if target_uid else 0
+            if sus_score > 3:
+                action = random.choice(['accuse', 'suspicion_level', 'deduction'])
+            elif sus_score > 1:
+                action = random.choice(['accuse', 'agree', 'react'])
+            elif sus_score < -2:
+                action = 'defend'
+            elif sus_score < -1:
+                action = random.choice(['defend', 'agree'])
+            else:
+                action = random.choice(['react', 'question', 'quiet', 'deduction'])
+
             game_state.send_to_creator(
                 format_bot_response(game_state, bot_uid, bot_data, target_uid, action, text),
                 parse_mode='Markdown'

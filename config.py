@@ -1,4 +1,7 @@
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', 'YOUR_FALLBACK_TOKEN_IF_LOCAL')
 DATABASE_PATH = os.getenv('DATABASE_PATH', 'blackout.db')
@@ -77,7 +80,7 @@ ROLE_DEFINITIONS = {
         'can_kill': False,
         'scan_result': 'SUSPICIOUS',
         'unique': True,
-        'ability': 'Steal one dead player\'s ability (one-time use)',
+        'ability': 'Steal any dead player\'s role (one-time use)',
         'limitation': 'Must survive + use stolen ability'
     },
     'Plague': {
@@ -174,8 +177,27 @@ BOT_PERSONALITIES = ['Aggressive', 'Cautious', 'Quiet', 'Strategic']
 
 SUSPICION_WEIGHTS = {
     'ABILITY_USED': 1,
-    'SCAN_SUSPICIOUS': 2,
-    'VOTE_WITH_CORRUPT': 3,
+    'SCAN_SUSPICIOUS': 3,
+    'SCAN_CLEAN': -2,
+    'VOTE_WITH_CORRUPT': 2,
+    'VOTE_AGAINST_INNOCENT': 1,
     'PROTECTED_BY_VOLT': -1,
-    'ACCUSED_BY': 2
+    'ACCUSED_BY': 2,
+    'DEFENDED_BY': -1,
+    'CONTRADICTION': 3,
+    'DEATH_ASSOCIATION': 2,
+    'VOTE_BLOC': 1,
+    'ROLE_REVEALED_CLEAN': -4,
+    'ROLE_REVEALED_CORRUPT': 5,
+    'SHERIFF_KILL_CONFIRMED': -3,
+    'DIED_ACCUSED': 3,
+    'ROUND_SURVIVED': 0.5,
+}
+
+SUSPICION_LEVEL_NAMES = {
+    'TRUSTED': (-999, -4),
+    'LEANING_CLEAN': (-4, -1),
+    'UNKNOWN': (-1, 1),
+    'SUSPICIOUS': (1, 5),
+    'HIGH_SUSPICION': (5, 999),
 }
