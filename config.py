@@ -1,7 +1,4 @@
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', 'YOUR_FALLBACK_TOKEN_IF_LOCAL')
 DATABASE_PATH = os.getenv('DATABASE_PATH', 'blackout.db')

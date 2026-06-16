@@ -66,6 +66,7 @@ class GameState:
         self.scan_results = {}
         self.exiled_players = []
         self.announced_abilities = []
+        self.phase_start_time = time.time()
 
     def can_message(self, user_id):
         now = datetime.now()
@@ -156,6 +157,42 @@ class GameState:
 
     def send_to_creator(self, text, **kwargs):
         self.send_msg(self.creator_id, text, **kwargs)
+
+
+def watchdog_check(game_state):
+    elapsed = time.time() - game_state.phase_start_time
+    phase = game_state.current_phase
+    if phase == 'NIGHT' and elapsed > 45:
+        print(f"WATCHDOG: Night phase stuck for {elapsed:.0f}s. Forcing dawn.")
+        try:
+            game_state.dead_this_round = []
+            game_state.last_night_deaths = []
+            start_dawn_phase(game_state)
+        except Exception as e:
+            print(f"WATCHDOG: Dawn also failed: {e}. Forcing day.")
+            try:
+                start_day_phase(game_state)
+            except Exception:
+                pass
+    elif phase == 'DAY' and elapsed > 65:
+        print(f"WATCHDOG: Day phase stuck for {elapsed:.0f}s. Forcing voting.")
+        try:
+            send_voting_phase(game_state)
+        except Exception:
+            try:
+                start_night_phase(game_state)
+            except Exception:
+                pass
+    elif phase == 'VOTING' and elapsed > 45:
+        print(f"WATCHDOG: Voting stuck for {elapsed:.0f}s. Forcing night.")
+        try:
+            bot_votes(game_state)
+            resolve_votes(game_state)
+        except Exception:
+            try:
+                start_night_phase(game_state)
+            except Exception:
+                pass
 
 
 def extract_uid(data, prefix_parts=1):
@@ -288,7 +325,11 @@ def format_bot_response(game_state, uid, data, target_uid, action, text):
     alive = game_state.get_alive_players()
     others = [(uid2, d2) for uid2, d2 in alive if uid2 != uid]
     target_name = game_state.get_player_name(target_uid) if target_uid else 'someone'
-    accuser_name = random.choice([d2['name'] for uid2, d2 in others if uid2 != target_uid]) if others and target_uid else 'Someone'
+
+    accuser_options = [d2['name'] for uid2, d2 in others if uid2 != target_uid and uid2 != uid]
+    if not accuser_options:
+        accuser_options = [d2['name'] for uid2, d2 in others] if others else ['Someone']
+    accuser_name = random.choice(accuser_options)
     truncated = (text[:80] + '...') if len(text) > 80 else text
 
     brain = game_state.bot_brain.get(uid, {})
@@ -341,20 +382,14 @@ def format_bot_response(game_state, uid, data, target_uid, action, text):
     ref_prefix = game_ref + scan_ref + vote_ref
 
     pool = templates.get(action, templates.get('quiet', []))
-    if isinstance(pool, list):
-        template = random.choice(pool) if pool else random.choice(templates.get('quiet', ["🤖 {bot} says: ..."]))
+    if isinstance(pool, list) and pool:
+        template = random.choice(pool)
     else:
-        template = pool
+        return f"🤖 {data['name']} says: Hmm."
 
     pct = random.randint(60, 95)
     score = round(random.uniform(5.5, 9.5), 1)
-    buddy_data = None
-    if action == 'vote_bloc' and others:
-        for uid2, d2 in others:
-            if uid2 != target_uid:
-                buddy_data = d2
-                break
-    buddy_name = buddy_data['name'] if buddy_data else 'someone'
+    buddy_name = accuser_name
 
     try:
         response = template.format(
@@ -362,8 +397,11 @@ def format_bot_response(game_state, uid, data, target_uid, action, text):
             message=truncated, pct=pct, score=score, buddy=buddy_name,
             player=accuser_name
         )
-    except KeyError:
-        response = template.format(bot=data['name'], target=target_name, accuser=accuser_name, message=truncated)
+    except (KeyError, IndexError):
+        try:
+            response = template.format(bot=data['name'], target=target_name, accuser=accuser_name, message=truncated)
+        except (KeyError, IndexError):
+            response = f"🤖 {data['name']} says: Hmm."
 
     if ref_prefix and random.random() < 0.5:
         response = ref_prefix.strip() + " " + response
@@ -451,6 +489,8 @@ def send_role_briefings(game_state):
             data['bot_uid'] = uid
             if role in ['Blackout', 'Razor', 'Phantom', 'Thug']:
                 game_state.bots[uid]['teammates'] = [uid2 for uid2, d2 in game_state.get_alive_corrupt() if uid2 != uid]
+
+        init_bot_brain(game_state)
 
     except Exception as e:
         print(f"Error in send_role_briefings: {e}")
@@ -1328,48 +1368,75 @@ def start_game(game_state):
 
 
 def start_night_phase(game_state):
+    if game_state.current_phase == 'NIGHT':
+        return
     game_state.current_phase = 'NIGHT'
+    game_state.phase_start_time = time.time()
     game_state.current_round += 1
     game_state.night_actions = {}
     game_state.votes = {}
 
     game_state.send_to_creator(NIGHT_MESSAGES['night_start'], parse_mode='Markdown')
 
-    for uid, data in game_state.players.items():
-        if not data.get('is_alive', True):
-            continue
-        role = data.get('role')
-        if role in ['Blackout', 'Razor', 'Thug']:
-            send_kill_prompt(game_state, uid)
-        elif role == 'Phantom':
-            send_mark_prompt(game_state, uid)
-        elif role in ['Virus', 'Wraith']:
-            send_neutral_kill_prompt(game_state, uid)
-        elif role == 'Glitch':
-            send_glitch_prompt(game_state, uid)
-        elif role == 'Plague':
-            send_plague_prompt(game_state, uid)
-        elif role == 'Volt':
-            send_protect_prompt(game_state, uid)
-        elif role == 'Grid':
-            send_scan_prompt(game_state, uid)
-        elif role == 'Bunker':
-            send_block_prompt(game_state, uid)
-        elif role == 'Kernel':
-            send_kernel_prompt(game_state, uid)
-        elif role == 'Flare':
-            send_flare_prompt(game_state, uid)
-        elif role == 'Sheriff':
-            send_sheriff_prompt(game_state, uid)
+    try:
+        for uid, data in game_state.players.items():
+            if not data.get('is_alive', True):
+                continue
+            role = data.get('role')
+            if role in ['Blackout', 'Razor', 'Thug']:
+                send_kill_prompt(game_state, uid)
+            elif role == 'Phantom':
+                send_mark_prompt(game_state, uid)
+            elif role in ['Virus', 'Wraith']:
+                send_neutral_kill_prompt(game_state, uid)
+            elif role == 'Glitch':
+                send_glitch_prompt(game_state, uid)
+            elif role == 'Plague':
+                send_plague_prompt(game_state, uid)
+            elif role == 'Volt':
+                send_protect_prompt(game_state, uid)
+            elif role == 'Grid':
+                send_scan_prompt(game_state, uid)
+            elif role == 'Bunker':
+                send_block_prompt(game_state, uid)
+            elif role == 'Kernel':
+                send_kernel_prompt(game_state, uid)
+            elif role == 'Flare':
+                send_flare_prompt(game_state, uid)
+            elif role == 'Sheriff':
+                send_sheriff_prompt(game_state, uid)
+    except Exception as e:
+        print(f"Error sending night prompts: {e}")
+        import traceback
+        traceback.print_exc()
 
-    resolve_bot_night_actions(game_state)
+    try:
+        resolve_bot_night_actions(game_state)
+    except Exception as e:
+        print(f"Error resolving bot night actions: {e}")
+        import traceback
+        traceback.print_exc()
 
     def dawn_job():
         time.sleep(30)
         if game_state.current_phase != 'NIGHT':
             return
-        resolve_night_actions(game_state)
-        start_dawn_phase(game_state)
+        try:
+            resolve_night_actions(game_state)
+        except Exception as e:
+            print(f"Error resolving night actions: {e}")
+            import traceback
+            traceback.print_exc()
+            game_state.dead_this_round = []
+            game_state.last_night_deaths = []
+        try:
+            start_dawn_phase(game_state)
+        except Exception as e:
+            print(f"Error in dawn phase: {e}")
+            import traceback
+            traceback.print_exc()
+            game_state.send_to_creator("⚠️ Error during dawn. Continuing game...")
+            start_day_phase(game_state)
 
     Thread(target=dawn_job, daemon=True).start()
 
@@ -1824,6 +1891,7 @@ def resolve_night_actions(game_state):
 
 def start_dawn_phase(game_state):
     game_state.current_phase = 'DAWN'
+    game_state.phase_start_time = time.time()
 
     dead_this_round = []
     for uid in game_state.dead_this_round:
@@ -1861,6 +1929,7 @@ def start_dawn_phase(game_state):
 
 def start_day_phase(game_state):
     game_state.current_phase = 'DAY'
+    game_state.phase_start_time = time.time()
     game_state.votes = {}
     game_state.used_abilities = {}
     init_bot_brain(game_state)
@@ -1868,58 +1937,71 @@ def start_day_phase(game_state):
     game_state.send_to_creator("🗣️ *DAY PHASE* — 30s for discussion, then voting...", parse_mode='Markdown')
 
     def run_day():
-        start = time.time()
-        alive_bots = [(uid, d) for uid, d in game_state.bots.items() if d.get('is_alive', True)]
-        random.shuffle(alive_bots)
+        try:
+            start = time.time()
+            alive_bots = [(uid, d) for uid, d in game_state.bots.items() if d.get('is_alive', True)]
+            random.shuffle(alive_bots)
 
-        for announcement in game_state.announced_abilities:
-            if game_state.current_phase != 'DAY':
-                break
-            game_state.send_to_creator(announcement, parse_mode='Markdown')
-            time.sleep(random.uniform(1.5, 3))
-        game_state.announced_abilities = []
+            for announcement in game_state.announced_abilities:
+                if game_state.current_phase != 'DAY':
+                    break
+                game_state.send_to_creator(announcement, parse_mode='Markdown')
+                time.sleep(random.uniform(1.5, 3))
+            game_state.announced_abilities = []
 
-        for uid, data in alive_bots:
-            if game_state.current_phase != 'DAY':
-                break
-            elapsed = time.time() - start
-            if elapsed >= 22:
-                break
-            brain = game_state.bot_brain.get(uid, {})
-            suspicions = brain.get('suspicion', {})
-            target_uid = max(suspicions, key=suspicions.get) if suspicions else None
-            if target_uid is None:
-                others = [uid2 for uid2, d2 in game_state.get_alive_players() if uid2 != uid]
-                target_uid = random.choice(others) if others else None
-            action = 'quiet'
-            sus_score = suspicions.get(target_uid, 0) if target_uid else 0
-            if sus_score > 3:
-                action = 'suspicion_level'
-            elif sus_score > 1:
-                action = random.choice(['accuse', 'deduction'])
-            elif sus_score < -2:
-                action = 'defend'
-            elif sus_score < -1:
-                action = random.choice(['defend', 'agree'])
-            else:
-                action = random.choice(['quiet', 'question', 'deduction'])
+            for uid, data in alive_bots:
+                if game_state.current_phase != 'DAY':
+                    break
+                elapsed = time.time() - start
+                if elapsed >= 22:
+                    break
+                brain = game_state.bot_brain.get(uid, {})
+                suspicions = brain.get('suspicion', {})
+                target_uid = max(suspicions, key=suspicions.get) if suspicions else None
+                if target_uid is None:
+                    others = [uid2 for uid2, d2 in game_state.get_alive_players() if uid2 != uid]
+                    target_uid = random.choice(others) if others else None
+                action = 'quiet'
+                sus_score = suspicions.get(target_uid, 0) if target_uid else 0
+                if sus_score > 3:
+                    action = 'suspicion_level'
+                elif sus_score > 1:
+                    action = random.choice(['accuse', 'deduction'])
+                elif sus_score < -2:
+                    action = 'defend'
+                elif sus_score < -1:
+                    action = random.choice(['defend', 'agree'])
+                else:
+                    action = random.choice(['quiet', 'question', 'deduction'])
 
-            game_state.send_to_creator(
-                format_bot_response(game_state, uid, data, target_uid, action, ''),
-                parse_mode='Markdown'
-            )
-            time.sleep(random.uniform(2, 4))
+                game_state.send_to_creator(
+                    format_bot_response(game_state, uid, data, target_uid, action, ''),
+                    parse_mode='Markdown'
+                )
+                time.sleep(random.uniform(2, 4))
 
-        remaining = 30 - (time.time() - start)
-        if remaining > 0:
-            time.sleep(remaining)
-        send_voting_phase(game_state)
+            remaining = 30 - (time.time() - start)
+            if remaining > 0:
+                time.sleep(remaining)
+        except Exception as e:
+            print(f"Error in day phase: {e}")
+            import traceback
+            traceback.print_exc()
+        try:
+            send_voting_phase(game_state)
+        except Exception as e:
+            print(f"Error starting voting: {e}")
+            import traceback
+            traceback.print_exc()
+            game_state.send_to_creator("⚠️ Voting error. Continuing...")
+            start_night_phase(game_state)
 
     Thread(target=run_day, daemon=True).start()
 
 
 def send_voting_phase(game_state):
     game_state.current_phase = 'VOTING'
+    game_state.phase_start_time = time.time()
 
     creator_data = game_state.players.get(game_state.creator_id)
     if creator_data and not creator_data.get('is_alive', True):
@@ -1939,8 +2021,18 @@ def send_voting_phase(game_state):
         time.sleep(GAME_SETTINGS['VOTING_TIME'])
         if game_state.current_phase != 'VOTING':
             return
-        bot_votes(game_state)
-        resolve_votes(game_state)
+        try:
+            bot_votes(game_state)
+            resolve_votes(game_state)
+        except Exception as e:
+            print(f"Error in auto_resolve: {e}")
+            import traceback
+            traceback.print_exc()
+            game_state.send_to_creator("⚠️ Voting error. Continuing to night...")
+            try:
+                start_night_phase(game_state)
+            except Exception:
+                pass
 
     Thread(target=auto_resolve, daemon=True).start()
 
@@ -2011,6 +2103,7 @@ def check_voting_complete(game_state):
 def resolve_votes(game_state):
     if game_state.current_phase not in ('VOTING', 'DAY'):
         return
+    game_state.current_phase = 'RESOLVING'
     vote_counts = {}
     for voter_uid, target_uid in game_state.votes.items():
         game_state.vote_history.append({
@@ -2249,6 +2342,18 @@ def handle_shutdown(signum, frame):
 
 signal.signal(signal.SIGTERM, handle_shutdown)
 signal.signal(signal.SIGINT, handle_shutdown)
+
+def watchdog_loop():
+    while True:
+        time.sleep(10)
+        for chat_id, gs in list(game_states.items()):
+            if gs.current_phase in ('NIGHT', 'DAY', 'VOTING'):
+                try:
+                    watchdog_check(gs)
+                except Exception as e:
+                    print(f"Watchdog error: {e}")
+
+Thread(target=watchdog_loop, daemon=True).start()
 
 while True:
     try:
